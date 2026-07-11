@@ -2,7 +2,7 @@
 # deploy.sh — build and deploy rag-pgvector-demo to GCP Cloud Run
 # Provisions: Artifact Registry, Cloud SQL PG16 (+pgvector), Cloud Run (backend + frontend)
 # No local Docker required — images built via Cloud Build.
-# Usage: ./scripts/deploy.sh
+# Usage: ./scripts/deploy.sh [local [--seed]]
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -15,6 +15,59 @@ DB_USER="postgres"
 DB_SECRET="rag-db-password"
 AR_REPO="rag-demo"
 SA_NAME="rag-runner"
+TARGET="${1:-cloud}"
+
+# ── local mode (no Docker) ────────────────────────────────────────────────────
+# Postgres + Redis run remotely (deployed Cloud SQL / Redis) or locally via brew.
+# No Docker Compose needed — set DATABASE_URL and REDIS_URL in .env.
+#
+# Remote (already deployed):  DATABASE_URL=<Cloud SQL proxy URL>  REDIS_URL=<remote>
+# Local (brew):               brew install postgresql redis
+#                             brew services start postgresql redis
+#                             DATABASE_URL=postgresql://postgres:@localhost:5432/ragdb
+#                             REDIS_URL=redis://localhost:6379
+if [[ "$TARGET" == "local" ]]; then
+  [[ -f "$ROOT/.env" ]] || { echo "Error: .env not found. Copy .env.example and fill in API keys, DATABASE_URL, REDIS_URL."; exit 1; }
+  # shellcheck source=/dev/null
+  source "$ROOT/.env"
+  if [[ -z "${DATABASE_URL:-}" ]] || [[ -z "${REDIS_URL:-}" ]]; then
+    printf '\nDATABASE_URL and/or REDIS_URL not set in .env.\n'
+    printf '  Remote: use your deployed Cloud SQL connection URL and Redis URL.\n'
+    printf '  Local:  brew install postgresql redis && brew services start postgresql redis\n'
+    printf '          DATABASE_URL=postgresql://postgres:@localhost:5432/ragdb\n'
+    printf '          REDIS_URL=redis://localhost:6379\n\n'
+    exit 1
+  fi
+
+  cd "$ROOT/backend"
+  [[ -d .venv ]] || python3 -m venv .venv
+  # shellcheck source=/dev/null
+  source .venv/bin/activate
+  pip install -q -r requirements.txt
+  cp "$ROOT/.env" "$ROOT/backend/.env" 2>/dev/null || true
+  uvicorn app.main:app --host 0.0.0.0 --port 8001 --reload &
+  BACKEND_PID=$!
+  echo "Backend  → http://localhost:8001/docs"
+
+  if [[ "${2:-}" == "--seed" ]]; then
+    sleep 3
+    echo "Seeding Wikipedia articles..."
+    python3 "$ROOT/scripts/seed.py"
+  fi
+
+  cd "$ROOT/frontend"
+  [[ -d node_modules ]] || npm install
+  grep -E '^(OPENAI|ANTHROPIC|NVIDIA|BACKEND)' "$ROOT/.env" > "$ROOT/frontend/.env.local" 2>/dev/null || true
+  echo "BACKEND_URL=http://localhost:8001" >> "$ROOT/frontend/.env.local"
+  npm run dev &
+  FRONTEND_PID=$!
+  echo "Frontend → http://localhost:3010"
+
+  _cleanup() { kill "$BACKEND_PID" "$FRONTEND_PID" 2>/dev/null || true; }
+  trap _cleanup EXIT INT TERM
+  wait "$BACKEND_PID" "$FRONTEND_PID"
+  exit 0
+fi
 
 # ── gcloud ────────────────────────────────────────────────────────────────────
 if ! command -v gcloud >/dev/null 2>&1; then
