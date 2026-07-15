@@ -469,7 +469,9 @@ _codebuild_run "frontend" "${TF_VAR_name_prefix}-frontend" "$CB_FE_PROJECT" \
 echo ""
 echo "[4/4] Updating SSM parameters and deploying to ECS..."
 
+# Source .env for API keys only — but preserve DATABASE_URL already set from Terraform
 [[ -f "$ROOT/.env" ]] && source "$ROOT/.env" || true
+DATABASE_URL=$(_tf database_url)   # re-read from Terraform to undo any .env override
 
 # Prompt for any missing API keys
 if [[ -z "${OPENAI_API_KEY:-}" ]]; then
@@ -521,11 +523,10 @@ app_containers = [c for c in td['containerDefinitions'] if c['name'] == 'app']
 if app_containers:
     app_containers[0]['image'] = image
     env = app_containers[0].get('environment', [])
-    existing_names = {e['name'] for e in env}
+    env_map = {e['name']: e for e in env}
     for e in extra_env:
-        if e['name'] not in existing_names:
-            env.append(e)
-    app_containers[0]['environment'] = env
+        env_map[e['name']] = e   # upsert — update existing values, not just append new ones
+    app_containers[0]['environment'] = list(env_map.values())
 print(json.dumps(td))
 PYEOF
 )
