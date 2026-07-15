@@ -1,7 +1,5 @@
 #!/usr/bin/env bash
-# deploy.sh — build and deploy rag-pgvector-demo to GCP Cloud Run
-# Provisions: Artifact Registry, Cloud SQL PG16 (+pgvector), Cloud Run (backend + frontend)
-# No local Docker required — images built via Cloud Build.
+# deploy.sh — rag-pgvector-demo: local dev, GCP Cloud Run, or AWS ECS
 # Usage: ./scripts/deploy.sh
 set -euo pipefail
 
@@ -16,11 +14,32 @@ DB_SECRET="rag-db-password"
 AR_REPO="rag-demo"
 SA_NAME="rag-runner"
 
-printf '\n  [1] Local  — uvicorn + npm dev, no Docker (Postgres+Redis via URLs in .env)\n'
-printf '  [2] Cloud  — build via Cloud Build, deploy to Cloud Run + Cloud SQL\n\n'
-read -rp 'Choose [1]: ' _MODE
-case "${_MODE:-1}" in
-  2) TARGET="cloud" ;;
+_aws_tf_ws_count() {
+  local ws="$1"
+  local state_file="$ROOT/infra/aws/terraform.tfstate.d/$ws/terraform.tfstate"
+  [[ -f "$state_file" ]] || { printf '0'; return; }
+  python3 -c "import json; d=json.load(open('$state_file')); print(sum(len(r.get('instances',[])) for r in d.get('resources',[])))" 2>/dev/null || printf '0'
+}
+_aws_lite_count=$(_aws_tf_ws_count lite)
+
+printf '\n=== rag-pgvector-demo ===\n\n'
+printf '  [1] Local  — uvicorn + npm dev, no Docker (Postgres+Redis via .env)'
+printf '\n'
+printf '  [2] Lite   — AWS: ECS Fargate + RDS db.t3.micro  (~$40-60/mo if left running)'
+(( _aws_lite_count > 0 )) && printf ' [%s resources active]' "$_aws_lite_count" || printf ' [not deployed]'
+printf '\n'
+printf '  [3] Cloud  — GCP Cloud Run + Cloud SQL'
+printf '\n\nChoice [1/2/3]: '
+read -r _MODE
+case "$_MODE" in
+  2) TARGET="aws"; DEPLOY_WORKSPACE="lite"; TF_VAR_name_prefix="rag-lite"
+     TF_VAR_be_task_cpu=512;  TF_VAR_be_task_memory=1024
+     TF_VAR_fe_task_cpu=256;  TF_VAR_fe_task_memory=512
+     TF_VAR_db_instance_class="db.t3.micro"
+     export DEPLOY_WORKSPACE TF_VAR_name_prefix TF_VAR_be_task_cpu TF_VAR_be_task_memory
+     export TF_VAR_fe_task_cpu TF_VAR_fe_task_memory TF_VAR_db_instance_class
+     ;;
+  3) TARGET="cloud" ;;
   *) TARGET="local" ;;
 esac
 
@@ -77,7 +96,8 @@ if [[ "$TARGET" == "local" ]]; then
   exit 0
 fi
 
-# ── gcloud ────────────────────────────────────────────────────────────────────
+# ── GCP Cloud Run ─────────────────────────────────────────────────────────────
+if [[ "$TARGET" == "cloud" ]]; then
 if ! command -v gcloud >/dev/null 2>&1; then
   printf '\ngcloud CLI not found.\n'
   if command -v brew >/dev/null 2>&1; then
@@ -276,4 +296,333 @@ printf '  App:  %s\n' "$FRONTEND_URL"
 printf '  API:  %s/docs\n' "$BACKEND_URL"
 printf '\nOptional seed against live backend:\n'
 printf '  BACKEND_URL=%s python scripts/seed.py\n' "$BACKEND_URL"
-printf '\nTear down: ./scripts/infra-down.sh\n'
+printf '\nTear down: ./scripts/infra-down.sh --cloud\n'
+exit 0
+fi
+
+# ── AWS ECS ───────────────────────────────────────────────────────────────────
+printf '\n--- AWS Lite summary ---\n'
+printf '  Backend:  ECS Fargate 0.5 vCPU / 1 GB + Redis sidecar\n'
+printf '  Frontend: ECS Fargate 0.25 vCPU / 0.5 GB\n'
+printf '  DB:       RDS PostgreSQL 16 db.t3.micro (20 GB)\n'
+printf '  Cost est: ~$40-60/mo if left running — TEAR DOWN when done\n'
+printf '\nProceed? [Y/n] '
+read -r _CONFIRM
+[[ -z "$_CONFIRM" || "$_CONFIRM" =~ ^[Yy]$ ]] || { printf 'Aborted.\n'; exit 0; }
+
+echo ""
+echo "[1/4] Checking AWS credentials..."
+if ! aws sts get-caller-identity >/dev/null 2>&1; then
+  printf '  AWS credentials not configured.\n'
+  printf '  Running: aws configure\n\n'
+  aws configure
+  if ! aws sts get-caller-identity >/dev/null 2>&1; then
+    printf '\n  Credentials still invalid — aborting.\n'; exit 1
+  fi
+fi
+printf '  Credentials valid: %s\n' "$(aws sts get-caller-identity --query 'Arn' --output text 2>/dev/null)"
+
+AWS_REGION=$(cd "$ROOT/infra/aws" && terraform output -raw aws_region 2>/dev/null || echo "us-east-1")
+
+_update_ecs_schedules() {
+  local _state="$1"
+  for _sched in "${TF_VAR_name_prefix}-start-be" "${TF_VAR_name_prefix}-stop-be" \
+                "${TF_VAR_name_prefix}-start-fe" "${TF_VAR_name_prefix}-stop-fe"; do
+    if ! _cur=$(aws scheduler get-schedule --name "$_sched" --output json 2>/dev/null); then
+      printf '  (schedule %s not found — run a full deploy first)\n' "$_sched"; continue
+    fi
+    _expr=$(printf '%s' "$_cur" | python3 -c "import sys,json;d=json.load(sys.stdin);print(d['ScheduleExpression'])" 2>/dev/null || true)
+    _tz=$(printf '%s' "$_cur" | python3 -c "import sys,json;d=json.load(sys.stdin);print(d.get('ScheduleExpressionTimezone','America/Los_Angeles'))" 2>/dev/null || echo "America/Los_Angeles")
+    _tgt=$(printf '%s' "$_cur" | python3 -c "import sys,json;d=json.load(sys.stdin);print(json.dumps(d['Target']))" 2>/dev/null || true)
+    if aws scheduler update-schedule --name "$_sched" --state "$_state" \
+        --schedule-expression "$_expr" --schedule-expression-timezone "$_tz" \
+        --flexible-time-window '{"Mode":"OFF"}' --target "$_tgt" \
+        --no-cli-pager >/dev/null 2>&1; then
+      printf '  %-50s → %s\n' "$_sched" "$_state"
+    else
+      printf '  ERROR: failed to update %s\n' "$_sched"
+    fi
+  done
+}
+
+_CLUSTER="${TF_VAR_name_prefix}-cluster"
+_BE_SVC="${TF_VAR_name_prefix}-backend"
+_FE_SVC="${TF_VAR_name_prefix}-frontend"
+_BE_STATE=$(aws ecs describe-services --cluster "$_CLUSTER" --services "$_BE_SVC" \
+  --query "services[0].status" --output text 2>/dev/null || echo "NOT_DEPLOYED")
+_FE_STATE=$(aws ecs describe-services --cluster "$_CLUSTER" --services "$_FE_SVC" \
+  --query "services[0].status" --output text 2>/dev/null || echo "NOT_DEPLOYED")
+_BE_DESIRED=$(aws ecs describe-services --cluster "$_CLUSTER" --services "$_BE_SVC" \
+  --query "services[0].desiredCount" --output text 2>/dev/null || echo "0")
+_FE_DESIRED=$(aws ecs describe-services --cluster "$_CLUSTER" --services "$_FE_SVC" \
+  --query "services[0].desiredCount" --output text 2>/dev/null || echo "0")
+_SCHED_STATE=$(aws scheduler get-schedule --name "${TF_VAR_name_prefix}-start-be" \
+  --query "State" --output text 2>/dev/null || echo "NOT_CREATED")
+
+printf '\n  Backend: %-12s desired=%s  Frontend: %-12s desired=%s\n' \
+  "$_BE_STATE" "$_BE_DESIRED" "$_FE_STATE" "$_FE_DESIRED"
+printf '  Auto-schedule: 8 am start · 5 pm stop · weekdays PT · state=%s\n' "$_SCHED_STATE"
+printf '  [1] Start now  [2] Stop now  [3] Suspend schedule  [4] Resume schedule  [enter] Full deploy: '
+read -r _PRE
+case "${_PRE:-}" in
+  1)
+    if [[ "$_BE_STATE" == "NOT_DEPLOYED" || "$_FE_STATE" == "NOT_DEPLOYED" ]]; then
+      printf '  Infra not found — falling through to full deploy.\n'
+    else
+      aws ecs update-service --cluster "$_CLUSTER" --service "$_BE_SVC" --desired-count 1 --no-cli-pager >/dev/null
+      aws ecs update-service --cluster "$_CLUSTER" --service "$_FE_SVC" --desired-count 1 --no-cli-pager >/dev/null
+      printf '  Services starting — tasks will be ready in ~1-2 min.\n'; exit 0
+    fi ;;
+  2)
+    if [[ "$_BE_STATE" == "NOT_DEPLOYED" && "$_FE_STATE" == "NOT_DEPLOYED" ]]; then
+      printf '  Nothing to stop — infra not deployed.\n'; exit 0
+    fi
+    aws ecs update-service --cluster "$_CLUSTER" --service "$_BE_SVC" --desired-count 0 --no-cli-pager >/dev/null 2>&1 || true
+    aws ecs update-service --cluster "$_CLUSTER" --service "$_FE_SVC" --desired-count 0 --no-cli-pager >/dev/null 2>&1 || true
+    printf '  Services stopped — no Fargate charges while at 0. ALB still billed.\n'; exit 0 ;;
+  3)
+    [[ "$_SCHED_STATE" == "NOT_CREATED" ]] && { printf '  No schedules found — run a full deploy first.\n'; exit 0; }
+    aws ecs update-service --cluster "$_CLUSTER" --service "$_BE_SVC" --desired-count 0 --no-cli-pager >/dev/null 2>&1 || true
+    aws ecs update-service --cluster "$_CLUSTER" --service "$_FE_SVC" --desired-count 0 --no-cli-pager >/dev/null 2>&1 || true
+    _update_ecs_schedules "DISABLED"; printf '  Schedule suspended.\n'; exit 0 ;;
+  4)
+    [[ "$_SCHED_STATE" == "NOT_CREATED" ]] && { printf '  No schedules found — run a full deploy first.\n'; exit 0; }
+    _update_ecs_schedules "ENABLED"; printf '  Schedule resumed.\n'; exit 0 ;;
+esac
+
+echo ""
+echo "[2/4] Provisioning AWS infra (ECS cluster, ALB, RDS, ECR, EventBridge)..."
+"$ROOT/scripts/infra-up-aws.sh"
+
+INFRA_DIR="$ROOT/infra/aws"
+cd "$INFRA_DIR"
+terraform workspace select "$DEPLOY_WORKSPACE" >/dev/null
+
+_TF_OUT=$(terraform output -json)
+_tf() { printf '%s' "$_TF_OUT" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['$1']['value'])"; }
+FRONTEND_URL=$(_tf frontend_url)
+BACKEND_URL=$(_tf backend_url)
+BE_ECR_URI=$(_tf backend_ecr_uri)
+FE_ECR_URI=$(_tf frontend_ecr_uri)
+CLUSTER_NAME=$(_tf cluster_name)
+BE_SVC=$(_tf backend_service)
+FE_SVC=$(_tf frontend_service)
+DATABASE_URL=$(_tf database_url)
+AWS_REGION=$(_tf aws_region)
+
+echo ""
+echo "[3/4] Building and pushing images via AWS CodeBuild (remote)..."
+TAG=$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || date +%Y%m%d%H%M%S)
+
+BUILD_BUCKET=$(_tf build_bucket)
+CB_BE_PROJECT=$(_tf codebuild_backend_project)
+CB_FE_PROJECT=$(_tf codebuild_frontend_project)
+
+_ecr_image_exists() {
+  local _repo="$1" _tag="$2"
+  aws ecr describe-images --repository-name "$_repo" --image-ids "imageTag=$_tag" \
+    --region "$AWS_REGION" >/dev/null 2>&1
+}
+
+_codebuild_wait() {
+  local _build_id="$1" _label="$2" _elapsed=0
+  printf '  %s build started: %s\n' "$_label" "$_build_id"
+  while true; do
+    _status=$(aws codebuild batch-get-builds --ids "$_build_id" \
+      --query "builds[0].buildStatus" --output text 2>/dev/null)
+    case "$_status" in
+      SUCCEEDED) printf '  %s build succeeded (%ds).\n' "$_label" "$_elapsed"; return 0 ;;
+      FAILED|FAULT|TIMED_OUT|STOPPED)
+        printf '  %s build %s (%ds) — check CodeBuild console.\n' "$_label" "$_status" "$_elapsed"; return 1 ;;
+      *) sleep 15; _elapsed=$(( _elapsed + 15 ))
+         printf '  %s still building... %ds\n' "$_label" "$_elapsed" ;;
+    esac
+  done
+}
+
+_codebuild_run() {
+  local _label="$1" _repo="$2" _project="$3" _zip_src="$4" _zip_key="$5"
+  shift 5
+  if _ecr_image_exists "$_repo" "$TAG"; then
+    printf '  %s image %s already in ECR — skipping build.\n' "$_label" "$TAG"
+    return 0
+  fi
+  printf '  Uploading %s source to S3...\n' "$_label"
+  (cd "$_zip_src" && zip -qr "/tmp/rag-${_label}-source.zip" .)
+  aws s3 cp "/tmp/rag-${_label}-source.zip" "s3://${BUILD_BUCKET}/${_zip_key}" --no-cli-pager >/dev/null
+  printf '  Building %s (%s:%s)...\n' "$_label" "$_repo" "$TAG"
+  local _build_id
+  _build_id=$(aws codebuild start-build \
+    --project-name "$_project" \
+    --environment-variables-override "name=IMAGE_TAG,value=${TAG},type=PLAINTEXT" "$@" \
+    --query "build.id" --output text --no-cli-pager)
+  _codebuild_wait "$_build_id" "$_label"
+}
+
+_codebuild_run "backend" "${TF_VAR_name_prefix}-backend" "$CB_BE_PROJECT" \
+  "$ROOT/backend" "backend-source.zip"
+
+_codebuild_run "frontend" "${TF_VAR_name_prefix}-frontend" "$CB_FE_PROJECT" \
+  "$ROOT/frontend" "frontend-source.zip" \
+  "name=BUILD_ARGS,value=--build-arg NEXT_PUBLIC_BACKEND_URL=${BACKEND_URL},type=PLAINTEXT"
+
+echo ""
+echo "[4/4] Updating SSM parameters and deploying to ECS..."
+
+[[ -f "$ROOT/.env" ]] && source "$ROOT/.env" || true
+
+# Prompt for any missing API keys
+if [[ -z "${OPENAI_API_KEY:-}" ]]; then
+  printf '\n  OPENAI_API_KEY is required (used for embeddings + chat).\n'
+  read -rp "  Enter OPENAI_API_KEY: " OPENAI_API_KEY
+  [[ -z "$OPENAI_API_KEY" ]] && { printf '  Cannot deploy without OPENAI_API_KEY.\n'; exit 1; }
+fi
+if [[ -z "${ANTHROPIC_API_KEY:-}" ]]; then
+  read -rp "  ANTHROPIC_API_KEY (optional — enables Anthropic provider toggle, Enter to skip): " ANTHROPIC_API_KEY
+fi
+if [[ -z "${NVIDIA_API_KEY:-}" ]]; then
+  read -rp "  NVIDIA_API_KEY (optional — enables NVIDIA NIM toggle, Enter to skip): " NVIDIA_API_KEY
+fi
+
+for _pair in "openai-key:${OPENAI_API_KEY:-}" "anthropic-key:${ANTHROPIC_API_KEY:-}" "nvidia-key:${NVIDIA_API_KEY:-}"; do
+  _pname="/${TF_VAR_name_prefix}/${_pair%%:*}"
+  _pval="${_pair#*:}"
+  [[ -z "$_pval" ]] && continue
+  aws ssm put-parameter --name "$_pname" --value "$_pval" \
+    --type SecureString --overwrite --no-cli-pager >/dev/null
+  printf '  Updated SSM: %s\n' "$_pname"
+done
+
+OPENAI_API_KEY=$(aws ssm get-parameter --name "/${TF_VAR_name_prefix}/openai-key" --with-decryption --query Parameter.Value --output text 2>/dev/null || echo "")
+ANTHROPIC_API_KEY=$(aws ssm get-parameter --name "/${TF_VAR_name_prefix}/anthropic-key" --with-decryption --query Parameter.Value --output text 2>/dev/null || echo "")
+NVIDIA_API_KEY=$(aws ssm get-parameter --name "/${TF_VAR_name_prefix}/nvidia-key" --with-decryption --query Parameter.Value --output text 2>/dev/null || echo "")
+
+_register_task_def() {
+  local family="$1" image="$2" port="$3" extra_env="$4"
+  local log_group="/ecs/${TF_VAR_name_prefix}"
+  local cur_def
+  cur_def=$(aws ecs describe-task-definition --task-definition "$family" --output json 2>/dev/null \
+    | python3 -c "import json,sys; td=json.load(sys.stdin)['taskDefinition']; \
+      [td.pop(k,None) for k in ['taskDefinitionArn','revision','status','requiresAttributes','compatibilities','registeredAt','registeredBy','deregisteredAt']]; \
+      print(json.dumps(td))" 2>/dev/null || echo "")
+  if [[ -z "$cur_def" ]]; then
+    printf '  Task definition %s not found — infra-up-aws.sh must run first.\n' "$family"; return 1
+  fi
+  local new_def _tmp
+  _tmp=$(mktemp)
+  printf '%s' "$cur_def" > "$_tmp"
+  new_def=$(python3 - "$image" "$port" "$extra_env" "$_tmp" <<'PYEOF'
+import json, sys
+image, port_str, extra_env_json, def_file = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+with open(def_file) as f:
+    td = json.load(f)
+extra_env = json.loads(extra_env_json) if extra_env_json else []
+app_containers = [c for c in td['containerDefinitions'] if c['name'] == 'app']
+if app_containers:
+    app_containers[0]['image'] = image
+    env = app_containers[0].get('environment', [])
+    existing_names = {e['name'] for e in env}
+    for e in extra_env:
+        if e['name'] not in existing_names:
+            env.append(e)
+    app_containers[0]['environment'] = env
+print(json.dumps(td))
+PYEOF
+)
+  rm -f "$_tmp"
+  local new_arn
+  new_arn=$(aws ecs register-task-definition --cli-input-json "$new_def" \
+    --query "taskDefinition.taskDefinitionArn" --output text --no-cli-pager)
+  printf '  Registered: %s\n' "$new_arn" >&2
+  printf '%s' "$new_arn"
+}
+
+BE_EXTRA_ENV=$(python3 -c "import json; print(json.dumps([e for e in [
+  {'name':'DATABASE_URL','value':'${DATABASE_URL}'},
+  {'name':'REDIS_URL','value':'redis://localhost:6379'},
+  {'name':'OPENAI_API_KEY','value':'${OPENAI_API_KEY}'},
+  {'name':'ANTHROPIC_API_KEY','value':'${ANTHROPIC_API_KEY}'},
+  {'name':'NVIDIA_API_KEY','value':'${NVIDIA_API_KEY}'},
+] if e['value']]))")
+BE_TASK_ARN=$(_register_task_def "${TF_VAR_name_prefix}-backend" "${BE_ECR_URI}:${TAG}" "8001" "$BE_EXTRA_ENV")
+
+FE_EXTRA_ENV=$(python3 -c "import json; print(json.dumps([e for e in [
+  {'name':'BACKEND_URL','value':'${BACKEND_URL}'},
+  {'name':'OPENAI_API_KEY','value':'${OPENAI_API_KEY}'},
+  {'name':'ANTHROPIC_API_KEY','value':'${ANTHROPIC_API_KEY}'},
+  {'name':'NVIDIA_API_KEY','value':'${NVIDIA_API_KEY}'},
+] if e['value']]))")
+FE_TASK_ARN=$(_register_task_def "${TF_VAR_name_prefix}-frontend" "${FE_ECR_URI}:${TAG}" "3010" "$FE_EXTRA_ENV")
+
+aws ecs update-service --cluster "$CLUSTER_NAME" --service "$BE_SVC" \
+  --task-definition "$BE_TASK_ARN" --force-new-deployment --no-cli-pager >/dev/null
+aws ecs update-service --cluster "$CLUSTER_NAME" --service "$FE_SVC" \
+  --task-definition "$FE_TASK_ARN" --force-new-deployment --no-cli-pager >/dev/null
+
+printf '\n  Waiting for services to stabilize (this takes 2-4 min)...\n'
+_ecs_wait_stable() {
+  local _cluster="$1" _region="$2"
+  shift 2
+  local _svcs=("$@")
+  local _elapsed=0 _all_stable=false
+
+  while (( _elapsed < 480 )); do
+    _all_stable=true
+    local _line=""
+    for _svc in "${_svcs[@]}"; do
+      local _out
+      _out=$(aws ecs describe-services \
+        --cluster "$_cluster" --services "$_svc" --region "$_region" \
+        --query "services[0].{desired:desiredCount,running:runningCount,pending:pendingCount,deployments:length(deployments)}" \
+        --output json 2>/dev/null)
+      local _desired _running _pending _deps
+      _desired=$(printf '%s' "$_out" | python3 -c "import json,sys;d=json.load(sys.stdin);print(d['desired'])" 2>/dev/null || echo "?")
+      _running=$(printf '%s' "$_out" | python3 -c "import json,sys;d=json.load(sys.stdin);print(d['running'])" 2>/dev/null || echo "?")
+      _pending=$(printf '%s' "$_out" | python3 -c "import json,sys;d=json.load(sys.stdin);print(d['pending'])" 2>/dev/null || echo "?")
+      _deps=$(printf '%s' "$_out"    | python3 -c "import json,sys;d=json.load(sys.stdin);print(d['deployments'])" 2>/dev/null || echo "?")
+
+      # also grab the most recent stopped task reason if running < desired
+      local _reason=""
+      if [[ "$_running" != "$_desired" || "$_deps" != "1" ]]; then
+        _all_stable=false
+        _reason=$(aws ecs list-tasks \
+          --cluster "$_cluster" --service-name "$_svc" \
+          --desired-status STOPPED --region "$_region" \
+          --query "taskArns[0]" --output text 2>/dev/null)
+        if [[ -n "$_reason" && "$_reason" != "None" ]]; then
+          _reason=$(aws ecs describe-tasks \
+            --cluster "$_cluster" --tasks "$_reason" --region "$_region" \
+            --query "tasks[0].containers[0].reason" --output text 2>/dev/null || echo "")
+          [[ -n "$_reason" && "$_reason" != "None" ]] && _reason=" ← $_reason"
+        else
+          _reason=""
+        fi
+      fi
+
+      _short="${_svc##*-}"
+      _line+="  ${_short}: running=${_running}/${_desired} pending=${_pending} deployments=${_deps}${_reason}\n"
+    done
+
+    printf "  [%ds]\n%b" "$_elapsed" "$_line"
+
+    "$_all_stable" && { printf '  All services stable.\n'; return 0; }
+    sleep 5
+    _elapsed=$(( _elapsed + 5 ))
+  done
+
+  printf '  Timed out after %ds — check ECS console.\n' "$_elapsed"
+  return 1
+}
+_ecs_wait_stable "$CLUSTER_NAME" "$AWS_REGION" "$BE_SVC" "$FE_SVC"
+
+printf '\n✓ RAG + pgvector Demo live on AWS\n'
+printf '  App:         %s\n' "$FRONTEND_URL"
+printf '  API Docs:    %s/docs\n' "$BACKEND_URL"
+printf '  Schedule:    8 am \xc2\xb7 5 pm PT weekdays (ECS desiredCount 1/0)\n'
+printf '  Tear down:   ./scripts/infra-down.sh --aws\n'
+
+PORTFOLIO_SET_LIVE="$(cd "$ROOT/../../portfolio/scripts" 2>/dev/null && pwd || true)/set-live-url.sh"
+if [[ -f "$PORTFOLIO_SET_LIVE" ]]; then
+  printf '\n  Updating portfolio live-urls.js...\n'
+  bash "$PORTFOLIO_SET_LIVE" --tier "lite" rag "$FRONTEND_URL" "${BACKEND_URL}/docs"
+fi

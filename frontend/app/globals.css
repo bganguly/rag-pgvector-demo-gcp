@@ -9,6 +9,7 @@
   --text: #0d1525;
   --text-2: #5a6282;
   --accent: #1254a0;
+  --accent-rgb: 18, 84, 160;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -19,6 +20,7 @@
     --text: #ccd4ea;
     --text-2: #6a7898;
     --accent: #4a8fd6;
+    --accent-rgb: 74, 143, 214;
   }
 }
 

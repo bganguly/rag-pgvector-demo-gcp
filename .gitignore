@@ -1,4 +1,5 @@
 .env
+.env.gcp
 backend/.env
 backend/.venv/
 frontend/.env.local
@@ -7,3 +8,5 @@ frontend/.next/
 __pycache__/
 *.pyc
 .DS_Store
+infra/aws/.terraform/
+infra/aws/terraform.tfstate.d/

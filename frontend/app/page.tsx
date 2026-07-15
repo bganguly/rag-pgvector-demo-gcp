@@ -2,12 +2,14 @@
 
 import { useState } from "react";
 import ChatPanel from "@/components/ChatPanel";
+import SeedPanel from "@/components/SeedPanel";
 import UploadPanel from "@/components/UploadPanel";
 
 export type Provider = "anthropic" | "openai" | "nim";
 
 export default function Home() {
   const [provider, setProvider] = useState<Provider>("anthropic");
+  const [ingested, setIngested] = useState(false);
 
   return (
     <div className="flex flex-col h-screen">
@@ -53,10 +55,12 @@ export default function Home() {
           className="w-80 shrink-0 border-r overflow-y-auto"
           style={{ background: "var(--surface)", borderColor: "var(--border)" }}
         >
-          <UploadPanel />
+          <SeedPanel onReady={() => setIngested(true)} />
+          <div style={{ borderTop: "1px solid var(--border)" }} />
+          <UploadPanel onIngest={() => setIngested(true)} />
         </div>
         <div className="flex-1 overflow-hidden">
-          <ChatPanel provider={provider} />
+          <ChatPanel provider={provider} ingested={ingested} />
         </div>
       </div>
     </div>

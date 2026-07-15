@@ -27,22 +27,32 @@ export async function POST(req: Request) {
   const query = messages.at(-1)?.content ?? "";
 
   const backendUrl = process.env.BACKEND_URL ?? "http://localhost:8001";
-  const retrieveRes = await fetch(`${backendUrl}/api/retrieve`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ query, k: 5 }),
-  });
 
-  const { chunks } = await retrieveRes.json();
+  let chunks: Array<{ content: string; source: string }> = [];
+  let backendError = false;
+  try {
+    const retrieveRes = await fetch(`${backendUrl}/api/retrieve`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query, k: 5 }),
+    });
+    if (retrieveRes.ok) {
+      const data = await retrieveRes.json();
+      chunks = data.chunks ?? [];
+    } else {
+      backendError = true;
+    }
+  } catch {
+    backendError = true;
+  }
 
-  const context =
-    chunks.length > 0
-      ? chunks
-          .map((c: { content: string; source: string }, i: number) =>
-            `[${i + 1}] (source: ${c.source})\n${c.content}`
-          )
-          .join("\n\n")
-      : "No relevant documents found in the knowledge base.";
+  const context = backendError
+    ? "The knowledge base is currently unavailable. Answer from general knowledge and note that the knowledge base could not be reached."
+    : chunks.length > 0
+    ? chunks
+        .map((c, i) => `[${i + 1}] (source: ${c.source})\n${c.content}`)
+        .join("\n\n")
+    : "No relevant documents found in the knowledge base.";
 
   const result = streamText({
     model: pickModel(provider),

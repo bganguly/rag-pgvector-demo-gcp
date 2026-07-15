@@ -16,113 +16,124 @@ Sister repo: [agent-orchestration-demo](https://github.com/bganguly/agent-orches
 | **LLM streaming** | Next.js App Router API route calls FastAPI `/api/retrieve`, then pipes context into Vercel AI SDK `streamText`; tokens stream to the browser via the AI SDK data-stream protocol |
 | **Provider toggle** | Anthropic `claude-3-5-haiku-20241022` (default) · OpenAI `gpt-4o-mini` · NVIDIA NIM `nvidia/llama-3.3-nemotron-super-49b-v1` — switched from the header without reloading |
 | **Ingest API** | `POST /api/ingest` accepts `.txt` / `.md` file upload or raw pasted text; chunked and embedded in one call |
-| **Session state** | Redis 7 (conversation history, rate-limit headroom) |
 | **Backend** | FastAPI 0.115 + asyncio; `lifespan` hook initialises pgvector extension and LangChain collection on startup |
 | **Frontend** | Next.js 15 App Router, React 19, TypeScript 5.7, Tailwind CSS; `useChat` from `ai/react` |
-| **Infra** | Docker Compose: `pgvector/pgvector:pg16` on `:5433`, `redis:7-alpine` on `:6380` |
-| **Seed data** | `scripts/seed.py` pulls six Wikipedia articles (Federal Reserve, Inflation, Interest rate, Quantitative easing, Monetary policy, GDP) via the Wikipedia REST API — no API key required |
+| **Infra** | AWS ECS Fargate (frontend + backend) · RDS PostgreSQL 16 · CloudFront · ECR · CodeBuild · EventBridge schedules |
 
 ---
 
 ## Architecture
 
 ```
-Browser ──► Next.js :3010 ──► /api/retrieve ──► FastAPI :8001
-              Vercel AI SDK                        LangChain pipeline
-              streamText                           pgvector (postgres :5433)
-              useChat hook                         OpenAI embeddings
-                                                   Redis :6380
+Browser ──► CloudFront ──► ALB ──► ECS Fargate :3010 (Next.js)
+                                         │
+                                         ├──► /api/retrieve ──► ECS Fargate :8001 (FastAPI)
+                                         │                            │
+                                         │                       LangChain pipeline
+                                         │                       pgvector (RDS PG16)
+                                         │                       OpenAI embeddings
+                                         │
+                                    Vercel AI SDK streamText ──► LLM provider
 
 Ingest path:
-  UI upload / paste ──► Next.js /api/ingest ──► FastAPI /api/ingest
-                                                  LangChain splitter
-                                                  OpenAI embed
-                                                  pgvector upsert
+  UI topic select / file upload ──► Next.js /api/ingest ──► FastAPI /api/ingest
+                                                              LangChain splitter
+                                                              OpenAI embed → pgvector
 ```
 
 ---
 
-## Local Dev
+## Deploy (AWS ECS Fargate)
+
+### Prerequisites
 
 ```bash
-./scripts/local-dev.sh
+aws configure            # IAM user needs: ECS, ECR, RDS, S3, CodeBuild, IAM, CloudFront, EventBridge
+cp .env.example .env     # fill in OPENAI_API_KEY (required) and optionally ANTHROPIC/NVIDIA keys
 ```
 
-Starts Docker Compose (postgres + redis), installs Python deps in a venv, starts FastAPI on `:8001`,
-installs Node deps, starts Next.js on `:3010`.
-
-```bash
-./scripts/local-dev.sh --seed   # also pulls and ingests 6 Wikipedia articles on first run
-```
-
-Prerequisites checked at startup:
-- **Docker** — for postgres + redis
-- **Python 3.12+** — venv created automatically inside `backend/`
-- **Node 20+** — `npm install` run automatically inside `frontend/`
-- **`.env`** — created from `.env.example` on first run; fill in `OPENAI_API_KEY` and `ANTHROPIC_API_KEY`
-
----
-
-## Tear Down
-
-```bash
-./scripts/infra-down.sh   # stops and removes Docker volumes
-```
-
----
-
-## Deploy
+### Deploy
 
 ```bash
 ./scripts/deploy.sh
+# → choose [2] Lite  (ECS Fargate + RDS db.t3.micro, ~$40-60/mo while running)
 ```
 
-Provisions on GCP (no local Docker required — images built via Cloud Build):
+The script:
+1. Provisions infra via Terraform (ECS cluster, ALB, RDS PG16, ECR repos, CodeBuild projects, EventBridge schedules)
+2. Uploads source to S3 and builds both Docker images remotely via CodeBuild — no local Docker required
+3. Registers new ECS task definitions and force-deploys both services
+4. Prints the CloudFront URL when done (~5-10 min total)
 
-- **Artifact Registry** — Docker image repo
-- **Cloud SQL PG16** — managed postgres with pgvector extension enabled on first boot
-- **Cloud Run** — backend (FastAPI) and frontend (Next.js), each as independent services
-- **Secret Manager** — stores DB password and API keys; injected at runtime
+**Auto-schedule:** ECS tasks start at 8 am and stop at 5 pm PT on weekdays. Use `[1] Start now` / `[2] Stop now` inside `deploy.sh` to control manually without a full re-deploy.
 
-Prerequisites: `gcloud` CLI authenticated (`gcloud auth login`) and a project set
-(`gcloud config set project <id>`). API keys are read from your local `.env` and pushed
-to Secret Manager on first deploy.
+### Tear down
 
 ```bash
-./scripts/infra-down.sh          # stop local Docker
-./scripts/infra-down.sh --cloud  # delete Cloud Run services + Cloud SQL instance
+./scripts/infra-down.sh --aws
 ```
 
 ---
 
-## Quick Test — Local
+## Deploy (GCP Cloud Run)
 
 ```bash
-# Health
+gcloud auth login
+gcloud config set project <your-project-id>
+./scripts/deploy.sh
+# → choose [3] Cloud
+```
+
+Provisions Cloud SQL PG16, Artifact Registry, and two Cloud Run services (backend + frontend). Images built via Cloud Build — no local Docker required.
+
+---
+
+## Using the App
+
+1. **Select topics** — toggle the Wikipedia topic chips in the left panel (Federal Reserve, Inflation, GDP, etc.), then click **Load Selected** to fetch, chunk, embed, and store them.
+2. **Ask a question** — pick from the **Sample questions** strip above the input (auto-submits), or type your own and press **Ask**.
+3. **Switch provider** — use the Anthropic / OpenAI / NVIDIA NIM toggle in the header at any time.
+4. **Custom documents** *(optional)* — expand **Custom Documents** at the bottom of the left panel to paste text or upload a `.txt` / `.md` file.
+
+---
+
+## Local Dev (no Docker)
+
+### Prerequisites
+
+```bash
+brew install postgresql@16 redis pgvector node python@3.12
+brew services start postgresql@16
+brew services start redis
+```
+
+### Start
+
+```bash
+cp .env.example .env   # fill in API keys
+./scripts/local-dev.sh
+# or: ./scripts/local-dev.sh --seed   (also loads Wikipedia articles on first run)
+```
+
+| | |
+|---|---|
+| App | http://localhost:3010 |
+| FastAPI docs | http://localhost:8001/docs |
+
+The script auto-adjusts the DB/Redis ports for Homebrew (5432/6379), creates the `ragdb` database, enables the `vector` extension, sets up the Python venv, and starts both services.
+
+---
+
+## Quick Test
+
+```bash
 curl http://localhost:8001/health
 
-# Ingest a snippet
 curl -X POST http://localhost:8001/api/ingest \
   -F "text=The Federal Reserve sets interest rates to control inflation." \
   -F "source=test"
 
-# Retrieve similar chunks
 curl -X POST http://localhost:8001/api/retrieve \
   -H "Content-Type: application/json" \
   -d '{"query": "How does the Fed control inflation?", "k": 3}' | jq '.chunks[].score'
-
-# Chat via Next.js (token stream — watch it arrive)
-curl -X POST http://localhost:3010/api/chat \
-  -H "Content-Type: application/json" \
-  -d '{"messages":[{"role":"user","content":"What is the Fed?"}],"provider":"anthropic"}' \
-  --no-buffer
 ```
-
----
-
-## Live Services
-
-| Service | Local |
-|---|---|
-| Next.js app | http://localhost:3010 |
-| FastAPI docs | http://localhost:8001/docs |
