@@ -18,7 +18,7 @@ function pickModel(provider: string) {
     case "openai":
       return openai("gpt-4o-mini");
     default:
-      return anthropic("claude-3-5-haiku-20241022");
+      return anthropic("claude-haiku-4-5");
   }
 }
 
