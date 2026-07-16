@@ -46,7 +46,13 @@ Load full Wikipedia articles by topic label, then ask questions against what you
 
 ## Architecture
 
-### Ingest flow
+### Ingest flow — step by step
+
+1. **Browser → Wikipedia** — user selects a topic and clicks Load; the browser makes a `GET` directly to the Wikipedia MediaWiki API and receives the full article as a plain-text string (~30–100 k chars).
+2. **Browser → Next.js** — `SeedPanel` POSTs that string to `/api/ingest` (a Next.js API route on Vercel), which proxies it unchanged to the FastAPI backend on Lambda.
+3. **Lambda → LangChain TextSplitter** — FastAPI hands the raw string to `RecursiveCharacterTextSplitter` (LangChain), which splits it in memory into overlapping chunks of ~800 chars with 150-char overlap.
+4. **LangChain → OpenAI** — `OpenAIEmbeddings` sends the chunk batch to OpenAI's `text-embedding-3-small` model and receives back a 1 536-dim float vector for each chunk.
+5. **LangChain → pgvector (Neon)** — `PGVector.add_documents()` writes each (chunk text + vector) pair to Neon; the browser receives `{ chunks: N }` confirming how many were stored.
 
 ```mermaid
 sequenceDiagram
