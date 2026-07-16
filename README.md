@@ -105,12 +105,4 @@ sequenceDiagram
 | **No LLM response cache** | Same prompt + updated KB should return a different answer as documents change |
 | **Lambda cold start** | Mangum wraps FastAPI; `lifespan` hook runs `init_db()` on cold start; asyncpg pool uses `max_inactive_connection_lifetime=30` to handle Neon's auto-pause reconnection |
 
-### What LangChain replaces
-
-| Step | Without LangChain → with LangChain |
-|:--|:--|
-| **Text splitting** | Manual regex split with no overlap → `RecursiveCharacterTextSplitter` splits at semantic boundaries with configurable overlap, preventing context loss at chunk edges |
-| **Embeddings** | Raw `openai.embeddings.create()` calls with manual batching and no model-consistency guarantee → `OpenAIEmbeddings` pins the same model at ingest and query time; a mismatch silently breaks cosine scores |
-| **Document store** | Manual `CREATE TABLE`, `CREATE INDEX`, and a parameterised `INSERT` per chunk → `PGVector.add_documents()` provisions schema and IVFFlat index on startup with no migrations to write |
-| **Similarity search** | Embed query separately, then `SELECT … ORDER BY embedding <=> $1 LIMIT k` → `PGVector.similarity_search_with_relevance_scores()` returns typed `(Document, float)` pairs in one call |
 
