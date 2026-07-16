@@ -6,7 +6,7 @@ export async function POST(req: Request) {
     const res = await fetch(`${backendUrl}/api/ingest`, {
       method: "POST",
       body: formData,
-      signal: AbortSignal.timeout(30000),
+      signal: AbortSignal.timeout(90000),
     });
     const data = await res.json();
     return Response.json(data, { status: res.status });

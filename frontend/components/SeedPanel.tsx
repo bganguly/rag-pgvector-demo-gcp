@@ -19,6 +19,7 @@ type TState = {
   chunks?:     number;
   estChunks?:  number;
   startedAt?:  number;
+  errorMsg?:   string;
 };
 
 const STATUS_ICON: Record<Status, string>            = { idle: "", fetching: "↓", ingesting: "⊙", done: "✓", error: "✗" };
@@ -51,7 +52,7 @@ async function fetchWikiText(slug: string): Promise<string> {
 }
 
 export default function SeedPanel({ onReady }: { onReady?: () => void }) {
-  const [selected, setSelected] = useState<Set<string>>(new Set(TOPICS.map((t) => t.id)));
+  const [selected, setSelected] = useState<Set<string>>(new Set());
   const [states, setStates]   = useState<Record<string, TState>>(blank);
   const [running, setRunning] = useState(false);
   const [total, setTotal]     = useState(0);
@@ -110,13 +111,13 @@ export default function SeedPanel({ onReady }: { onReady?: () => void }) {
 
         const res  = await fetch("/api/ingest", { method: "POST", body: fd });
         const data = await res.json();
-        if (!res.ok) throw new Error(data.detail ?? "failed");
+        if (!res.ok) throw new Error(data.detail ?? data.Message ?? `HTTP ${res.status}`);
 
         acc += data.chunks ?? 0;
         setTotal(acc);
         set(t.id, { status: "done", chunks: data.chunks });
-      } catch {
-        set(t.id, { status: "error" });
+      } catch (e) {
+        set(t.id, { status: "error", errorMsg: e instanceof Error ? e.message : "failed" });
       }
     }
 
@@ -220,13 +221,23 @@ export default function SeedPanel({ onReady }: { onReady?: () => void }) {
         </div>
       )}
 
+      {toLoad().some((t) => states[t.id].status === "error") && (
+        <div className="text-xs rounded px-3 py-2" style={{ color: "#ef4444", background: "rgba(239,68,68,0.08)", border: "1px solid #ef444433" }}>
+          {toLoad()
+            .filter((t) => states[t.id].status === "error")
+            .map((t) => (
+              <div key={t.id}><strong>{t.label}:</strong> {states[t.id].errorMsg ?? "failed"}</div>
+            ))}
+        </div>
+      )}
+
       {allDone ? (
         <>
           <div
             className="text-center text-xs py-2 rounded"
             style={{ color: "#22c55e", border: "1px solid #22c55e33" }}
           >
-            ✓ {total} chunks indexed and ready
+            ✓ Ready — ask a question in the chat
           </div>
           <div className="flex gap-3 justify-center">
             <button onClick={() => load(true)}  className="text-xs underline" style={{ color: "#ef4444" }}>
@@ -249,9 +260,9 @@ export default function SeedPanel({ onReady }: { onReady?: () => void }) {
           }}
         >
           {running
-            ? `Indexing ${doneCount} / ${toLoad().length}…`
+            ? `Loading ${doneCount} / ${toLoad().length}…`
             : selectedCount === 0
-            ? "Select at least one topic"
+            ? "Pick one or two topics above to get started"
             : `Load Selected (${selectedCount})`}
         </button>
       )}
