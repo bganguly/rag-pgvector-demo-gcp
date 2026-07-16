@@ -88,40 +88,6 @@ sequenceDiagram
     LLM-->>B: token stream via SSE data-stream protocol
 ```
 
-### What LangChain replaces
-
-<table>
-<thead>
-<tr>
-  <th width="20%">Component</th>
-  <th width="20%">Without LangChain</th>
-  <th width="60%">Why it matters</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-  <td><code>Recursive<wbr>Character<wbr>Text<wbr>Splitter</code></td>
-  <td>Manual regex split + overlap bookkeeping</td>
-  <td>Overlap prevents semantic units being cut at chunk boundaries — retrieval precision drops without it</td>
-</tr>
-<tr>
-  <td><code>OpenAI<wbr>Embeddings</code></td>
-  <td>Raw <code>openai.<wbr>embeddings.<wbr>create()</code> + batching</td>
-  <td>Guarantees same model ID at ingest and query time — a mismatch silently breaks cosine scores</td>
-</tr>
-<tr>
-  <td><code>PGVector.<wbr>aadd_<wbr>documents()</code></td>
-  <td><code>CREATE TABLE</code>, <code>CREATE INDEX</code>, parameterised <code>INSERT</code> per chunk</td>
-  <td>Schema + IVFFlat index provisioned automatically on startup; no migrations to write</td>
-</tr>
-<tr>
-  <td><code>PGVector.<wbr>similarity_<wbr>search_<wbr>with_<wbr>relevance_<wbr>scores()</code></td>
-  <td>Embed query → <code>SELECT … ORDER BY embedding &lt;=&gt; $1 LIMIT k</code></td>
-  <td>One call returns typed <code>(Document, float)</code> tuples that map directly to the API response</td>
-</tr>
-</tbody>
-</table>
-
 ### Key design decisions
 
 | Concern | Approach |
@@ -132,4 +98,13 @@ sequenceDiagram
 | **Streaming** | Next.js API route proxies Lambda retrieve call, then calls `streamText`; the AI SDK data-stream protocol delivers deltas directly to `useChat` — no polling |
 | **No LLM response cache** | Same prompt + updated KB should return a different answer as documents change |
 | **Lambda cold start** | Mangum wraps FastAPI; `lifespan` hook runs `init_db()` on cold start; asyncpg pool uses `max_inactive_connection_lifetime=30` to handle Neon's auto-pause reconnection |
+
+### What LangChain replaces
+
+| Step | Without LangChain → with LangChain |
+|:--|:--|
+| **Text splitting** | Manual regex split with no overlap → `RecursiveCharacterTextSplitter` splits at semantic boundaries with configurable overlap, preventing context loss at chunk edges |
+| **Embeddings** | Raw `openai.embeddings.create()` calls with manual batching and no model-consistency guarantee → `OpenAIEmbeddings` pins the same model at ingest and query time; a mismatch silently breaks cosine scores |
+| **Document store** | Manual `CREATE TABLE`, `CREATE INDEX`, and a parameterised `INSERT` per chunk → `PGVector.add_documents()` provisions schema and IVFFlat index on startup with no migrations to write |
+| **Similarity search** | Embed query separately, then `SELECT … ORDER BY embedding <=> $1 LIMIT k` → `PGVector.similarity_search_with_relevance_scores()` returns typed `(Document, float)` pairs in one call |
 
