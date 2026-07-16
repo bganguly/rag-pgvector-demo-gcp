@@ -473,6 +473,7 @@ echo "[4/4] Updating SSM parameters and deploying to ECS..."
 [[ -f "$ROOT/.env" ]] && source "$ROOT/.env" || true
 DATABASE_URL=$(_tf database_url)   # re-read from Terraform to undo any .env override
 PGVECTOR_CONNECTION="${DATABASE_URL/postgresql:\/\//postgresql+psycopg://}"
+BACKEND_URL=$(_tf backend_url)     # re-read to undo any .env override
 
 # Prompt for any missing API keys
 if [[ -z "${OPENAI_API_KEY:-}" ]]; then
