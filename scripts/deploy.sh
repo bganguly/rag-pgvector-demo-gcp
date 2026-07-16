@@ -291,22 +291,21 @@ printf '  Credentials valid: %s\n' "$(aws sts get-caller-identity --query 'Arn' 
 AWS_REGION=$(aws configure get region 2>/dev/null || echo "us-east-1")
 
 echo ""
-echo "[2/5] Provisioning AWS infra (Lambda, ECR, CodeBuild, S3)..."
-cd "$ROOT/infra/aws"
+echo "[2/5] Provisioning bootstrap infra (ECR, S3, IAM, CodeBuild)..."
+INFRA_DIR="$ROOT/infra/aws"
+cd "$INFRA_DIR"
 terraform init -upgrade -input=false
 terraform workspace select "$DEPLOY_WORKSPACE" 2>/dev/null \
   || terraform workspace new "$DEPLOY_WORKSPACE"
-terraform apply -auto-approve -var "name_prefix=${TF_VAR_name_prefix}"
 
-INFRA_DIR="$ROOT/infra/aws"
-cd "$INFRA_DIR"
-terraform workspace select "$DEPLOY_WORKSPACE" >/dev/null
+_tf() { terraform output -raw "$1" 2>/dev/null; }
 
-_TF_OUT=$(terraform output -json)
-_tf() { printf '%s' "$_TF_OUT" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['$1']['value'])"; }
-BACKEND_URL=$(_tf backend_url)
+# Phase 1 — ECR, S3, IAM, CodeBuild only; Lambda requires the image to exist in ECR first
+terraform apply -auto-approve -var "name_prefix=${TF_VAR_name_prefix}" \
+  -target=aws_codebuild_project.backend \
+  -target=aws_s3_bucket_lifecycle_configuration.build_artifacts
+
 BE_ECR_URI=$(_tf backend_ecr_uri)
-LAMBDA_NAME=$(_tf lambda_function_name)
 AWS_REGION=$(_tf aws_region)
 BUILD_BUCKET=$(_tf build_bucket)
 CB_BE_PROJECT=$(_tf codebuild_backend_project)
@@ -406,6 +405,12 @@ _codebuild_wait() {
 BE_REPO_NAME="${TF_VAR_name_prefix}-backend"
 if _ecr_image_exists "$BE_REPO_NAME" "$TAG"; then
   printf '  Backend image %s already in ECR — skipping build.\n' "$TAG"
+  _MANIFEST=$(aws ecr batch-get-image --repository-name "$BE_REPO_NAME" \
+    --image-ids "imageTag=${TAG}" --query 'images[0].imageManifest' \
+    --output text --no-cli-pager 2>/dev/null)
+  aws ecr put-image --repository-name "$BE_REPO_NAME" --image-tag latest \
+    --image-manifest "$_MANIFEST" --no-cli-pager >/dev/null 2>&1 \
+    && printf '  Re-tagged %s as latest.\n' "$TAG" || true
 else
   printf '  Uploading backend source to S3...\n'
   (cd "$ROOT/backend" && zip -qr "/tmp/rag-backend-source.zip" .)
@@ -418,33 +423,46 @@ else
   _codebuild_wait "$_BUILD_ID" "backend"
 fi
 
+echo "  Finalising Lambda and remaining infra..."
+cd "$INFRA_DIR"
+terraform state rm aws_lambda_function_url.backend >/dev/null 2>&1 || true
+terraform state rm aws_lambda_permission.public_url >/dev/null 2>&1 || true
+terraform import aws_lambda_permission.apigw \
+  "${TF_VAR_name_prefix}-backend/AllowAPIGatewayInvoke" >/dev/null 2>&1 || true
+terraform apply -auto-approve -var "name_prefix=${TF_VAR_name_prefix}"
+BACKEND_URL=$(_tf backend_url)
+LAMBDA_NAME=$(_tf lambda_function_name)
+
 echo ""
 echo "[5/5] Updating Lambda config and deploying frontend to Vercel..."
 
-_ENV_VARS=$(python3 -c "import json; print(json.dumps({k:v for k,v in [
-  ('DATABASE_URL','${DATABASE_URL}'),
-  ('PGVECTOR_CONNECTION','${PGVECTOR_CONNECTION}'),
-  ('OPENAI_API_KEY','${OPENAI_API_KEY}'),
-  ('ANTHROPIC_API_KEY','${ANTHROPIC_API_KEY:-}'),
-  ('NVIDIA_API_KEY','${NVIDIA_API_KEY:-}'),
-  ('CORS_ORIGINS','*'),
-] if v}))")
+printf '  Waiting for Lambda to be ready...\n'
+aws lambda wait function-updated --function-name "$LAMBDA_NAME" --no-cli-pager
+
+_ENV_FILE="$(mktemp /tmp/lambda-env-XXXXXX)"
+python3 - "$DATABASE_URL" "$PGVECTOR_CONNECTION" "$OPENAI_API_KEY" \
+  "${ANTHROPIC_API_KEY:-}" "${NVIDIA_API_KEY:-}" <<'PYEOF' > "$_ENV_FILE"
+import json, sys
+keys = ['DATABASE_URL','PGVECTOR_CONNECTION','OPENAI_API_KEY','ANTHROPIC_API_KEY','NVIDIA_API_KEY','CORS_ORIGINS']
+vals = list(sys.argv[1:]) + ['*']
+env = {k: v for k, v in zip(keys, vals) if v}
+print(json.dumps({'Variables': env}))
+PYEOF
 
 aws lambda update-function-configuration \
   --function-name "$LAMBDA_NAME" \
-  --environment "Variables=${_ENV_VARS}" \
+  --environment "file://${_ENV_FILE}" \
   --no-cli-pager >/dev/null
+rm -f "$_ENV_FILE"
+aws lambda wait function-updated --function-name "$LAMBDA_NAME" --no-cli-pager
 
 aws lambda update-function-code \
   --function-name "$LAMBDA_NAME" \
   --image-uri "${BE_ECR_URI}:${TAG}" \
   --no-cli-pager >/dev/null
-
-printf '  Waiting for Lambda to be active...\n'
 aws lambda wait function-updated --function-name "$LAMBDA_NAME" --no-cli-pager
 printf '  Lambda active.\n'
 
-BACKEND_URL=$(_tf backend_url)
 printf '  Backend: %s\n' "$BACKEND_URL"
 
 if ! command -v vercel >/dev/null 2>&1; then

@@ -5,7 +5,7 @@ OpenAI embeddings stored in **pgvector**, cosine-similarity retrieval, and token
 **Vercel AI SDK**. Provider toggle switches between Anthropic, OpenAI, and **NVIDIA NIM (Nemotron)** at
 runtime — same interface, configurable `base_url`.
 
-**[Live demo →](https://bganguly.github.io/?open=rag)**
+**[Live demo →](https://bganguly.github.io/?open=rag)** · [Screenshot](https://claude.ai/code/artifact/68435554-f15d-437c-9cff-db62bf578b1e?via=auto_preview)
 
 ---
 

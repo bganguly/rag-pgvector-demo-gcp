@@ -1,5 +1,5 @@
 output "backend_url" {
-  value = aws_lambda_function_url.backend.function_url
+  value = aws_apigatewayv2_stage.backend.invoke_url
 }
 
 output "backend_ecr_uri" {
