@@ -5,7 +5,14 @@ OpenAI embeddings stored in **pgvector**, cosine-similarity retrieval, and token
 **Vercel AI SDK**. Provider toggle switches between Anthropic, OpenAI, and **NVIDIA NIM (Nemotron)** at
 runtime — same interface, configurable `base_url`.
 
-Sister repo: [agent-orchestration-demo](https://github.com/bganguly/agent-orchestration-demo)
+**[→ Portfolio demo](https://bganguly.github.io/?open=rag)**
+
+## Using the App
+
+1. **Select topics** — toggle the Wikipedia topic chips in the left panel, then click **Load Selected** to fetch, chunk, embed, and store them.
+2. **Ask a question** — pick from the **Sample questions** strip above the input, or type your own and press **Ask**.
+3. **Switch provider** — use the Anthropic / OpenAI / NVIDIA NIM toggle in the header at any time.
+4. **Custom documents** *(optional)* — expand **Custom Documents** to paste text or upload a `.txt` / `.md` file.
 
 ---
 
@@ -138,11 +145,3 @@ curl -X POST "$BASE/api/retrieve" \
   -d '{"query": "How does the Fed control inflation?", "k": 3}' | jq '.chunks[].score'
 ```
 
----
-
-## Using the App
-
-1. **Select topics** — toggle the Wikipedia topic chips in the left panel, then click **Load Selected** to fetch, chunk, embed, and store them.
-2. **Ask a question** — pick from the **Sample questions** strip above the input, or type your own and press **Ask**.
-3. **Switch provider** — use the Anthropic / OpenAI / NVIDIA NIM toggle in the header at any time.
-4. **Custom documents** *(optional)* — expand **Custom Documents** to paste text or upload a `.txt` / `.md` file.
