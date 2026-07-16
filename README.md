@@ -5,7 +5,7 @@ OpenAI embeddings stored in **pgvector**, cosine-similarity retrieval, and token
 **Vercel AI SDK**. Provider toggle switches between Anthropic, OpenAI, and **NVIDIA NIM (Nemotron)** at
 runtime — same interface, configurable `base_url`.
 
-**[Live demo →](https://bganguly.github.io/?open=rag)** &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; **[Claude artifact: explain the RAG-pgvector flow →](https://claude.ai/code/artifact/68435554-f15d-437c-9cff-db62bf578b1e?via=auto_preview)**
+**[Live demo →](https://frontend-618kikaix-gangulybikramjit-4435s-projects.vercel.app)** &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; **[Claude artifact: explain the RAG-pgvector flow →](https://claude.ai/code/artifact/68435554-f15d-437c-9cff-db62bf578b1e?via=auto_preview)**
 
 ---
 
@@ -17,7 +17,7 @@ Load full Wikipedia articles by topic label, then ask questions against what you
 2. **Click Load Selected** — fetches and indexes the selected articles; per-topic progress is shown as each one completes.
 3. **Ask a question** — pick from the **Sample questions** strip above the input, or type your own and press **Ask**.
 4. **Switch provider** — use the Anthropic / OpenAI / NVIDIA NIM toggle in the header at any time.
-5. **Clear & Re-index** — appears after a successful load; wipes all loaded content and re-fetches the selected topics fresh.
+5. **Reset & Reload / Load More** — appear after a successful load. *Reset & Reload* clears the entire knowledge base and re-fetches the selected topics from scratch. *Load More* keeps what's already loaded and adds the currently selected topics on top; it disappears once all topics are already loaded.
 6. **Custom documents** *(optional)* — paste text or upload a `.txt` / `.md` file to add your own content alongside the Wikipedia articles.
 
 ---
