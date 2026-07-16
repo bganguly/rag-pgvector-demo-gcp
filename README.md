@@ -90,12 +90,38 @@ sequenceDiagram
 
 ### What LangChain replaces
 
-| Component | Without LangChain | Why it matters |
-|:--|:--|:-------------------------------------|
-| `RecursiveCharacterTextSplitter` | Manual regex split + overlap bookkeeping | Overlap prevents semantic units being cut at chunk boundaries — retrieval precision drops without it |
-| `OpenAIEmbeddings` | Raw `openai.embeddings.create()` + batching | Guarantees same model ID at ingest and query time — a mismatch silently breaks cosine scores |
-| `PGVector.aadd_documents()` | `CREATE TABLE`, `CREATE INDEX`, parameterised `INSERT` per chunk | Schema + IVFFlat index provisioned automatically on startup; no migrations to write |
-| `PGVector.similarity_search_with_relevance_scores()` | Embed query → `SELECT … ORDER BY embedding <=> $1 LIMIT k` | One call returns typed `(Document, float)` tuples that map directly to the API response |
+<table>
+<colgroup>
+  <col style="width:20%">
+  <col style="width:20%">
+  <col style="width:60%">
+</colgroup>
+<thead>
+<tr><th>Component</th><th>Without LangChain</th><th>Why it matters</th></tr>
+</thead>
+<tbody>
+<tr>
+  <td><code>RecursiveCharacterTextSplitter</code></td>
+  <td>Manual regex split + overlap bookkeeping</td>
+  <td>Overlap prevents semantic units being cut at chunk boundaries — retrieval precision drops without it</td>
+</tr>
+<tr>
+  <td><code>OpenAIEmbeddings</code></td>
+  <td>Raw <code>openai.embeddings.create()</code> + batching</td>
+  <td>Guarantees same model ID at ingest and query time — a mismatch silently breaks cosine scores</td>
+</tr>
+<tr>
+  <td><code>PGVector.aadd_documents()</code></td>
+  <td><code>CREATE TABLE</code>, <code>CREATE INDEX</code>, parameterised <code>INSERT</code> per chunk</td>
+  <td>Schema + IVFFlat index provisioned automatically on startup; no migrations to write</td>
+</tr>
+<tr>
+  <td><code>PGVector.similarity_search_with_relevance_scores()</code></td>
+  <td>Embed query → <code>SELECT … ORDER BY embedding &lt;=&gt; $1 LIMIT k</code></td>
+  <td>One call returns typed <code>(Document, float)</code> tuples that map directly to the API response</td>
+</tr>
+</tbody>
+</table>
 
 ### Key design decisions
 
