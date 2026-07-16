@@ -24,6 +24,8 @@ Sister repo: [agent-orchestration-demo](https://github.com/bganguly/agent-orches
 
 ## Architecture
 
+**Interactive component flow diagram:** [RAG Pipeline — Component Flow](https://claude.ai/code/artifact/68435554-f15d-437c-9cff-db62bf578b1e)
+
 ### Ingest flow
 
 ```mermaid
