@@ -115,9 +115,9 @@ fi
 
 printf '\n  Resources currently in state: %s\n' "$_BEFORE"
 printf '  This will destroy: ECS, ALB, RDS, CloudFront, VPC, ECR, CodeBuild, S3\n'
-printf '\n  Type "yes" to confirm: '
+printf '\n  Proceed? [Y/n]: '
 read -r _CONFIRM
-[[ "$_CONFIRM" == "yes" ]] || { red 'Aborted.'; exit 1; }
+[[ "${_CONFIRM:-y}" =~ ^[Yy]$ ]] || { red 'Aborted.'; exit 1; }
 
 # run destroy in background, poll progress
 bold '\nRunning terraform destroy...'
