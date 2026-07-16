@@ -29,7 +29,7 @@ Lambda and Neon both scale to zero between requests — no idle charges, no sche
 
 ---
 
-| | |
+| Component | Implementation |
 |---|---|
 | **RAG pipeline** | LangChain `RecursiveCharacterTextSplitter` (800 chars / 150 overlap) → OpenAI `text-embedding-3-small` (1 536 dims) → pgvector cosine similarity |
 | **Vector store** | PostgreSQL 16 + pgvector extension; `langchain-postgres` `PGVector` handles schema, IVFFlat index, and async upsert |
@@ -85,6 +85,15 @@ sequenceDiagram
     AI->>LLM: grounded request<br/>(claude-haiku-4-5 / gpt-4o-mini / nemotron)
     LLM-->>B: token stream via SSE data-stream protocol
 ```
+
+### What LangChain replaces
+
+| Component | Without LangChain | Why it matters |
+|:--|:--|:-------------------------------------|
+| `RecursiveCharacterTextSplitter` | Manual regex split + overlap bookkeeping | Overlap prevents semantic units being cut at chunk boundaries — retrieval precision drops without it |
+| `OpenAIEmbeddings` | Raw `openai.embeddings.create()` + batching | Guarantees same model ID at ingest and query time — a mismatch silently breaks cosine scores |
+| `PGVector.aadd_documents()` | `CREATE TABLE`, `CREATE INDEX`, parameterised `INSERT` per chunk | Schema + IVFFlat index provisioned automatically on startup; no migrations to write |
+| `PGVector.similarity_search_with_relevance_scores()` | Embed query → `SELECT … ORDER BY embedding <=> $1 LIMIT k` | One call returns typed `(Document, float)` tuples that map directly to the API response |
 
 ### Key design decisions
 
