@@ -474,18 +474,38 @@ DATABASE_URL=$(_tf database_url)   # re-read from Terraform to undo any .env ove
 PGVECTOR_CONNECTION="${DATABASE_URL/postgresql:\/\//postgresql+psycopg://}"
 BACKEND_URL=$(_tf backend_url)     # re-read to undo any .env override
 
-# Prompt for any missing API keys
-if [[ -z "${OPENAI_API_KEY:-}" ]]; then
-  printf '\n  OPENAI_API_KEY is required (used for embeddings + chat).\n'
-  read -rp "  Enter OPENAI_API_KEY: " OPENAI_API_KEY
-  [[ -z "$OPENAI_API_KEY" ]] && { printf '  Cannot deploy without OPENAI_API_KEY.\n'; exit 1; }
-fi
-if [[ -z "${ANTHROPIC_API_KEY:-}" ]]; then
-  read -rp "  ANTHROPIC_API_KEY (optional — enables Anthropic provider toggle, Enter to skip): " ANTHROPIC_API_KEY
-fi
-if [[ -z "${NVIDIA_API_KEY:-}" ]]; then
-  read -rp "  NVIDIA_API_KEY (optional — enables NVIDIA NIM toggle, Enter to skip): " NVIDIA_API_KEY
-fi
+_prompt_key() {
+  local _label="$1" _cur="${2:-}" _req="${3:-optional}"
+  local _ans _val
+  if [[ -n "$_cur" ]]; then
+    printf '  %-24s  %s...%s  update? [Y/n]: ' \
+      "$_label" "${_cur:0:8}" "${_cur: -4}" >&2
+    read -r _ans
+    if [[ -z "$_ans" || "$_ans" =~ ^[Yy]$ ]]; then
+      printf '  New value (Enter to keep current): ' >&2
+      read -rs _val; printf '\n' >&2
+      printf '%s' "${_val:-$_cur}"
+    else
+      printf '%s' "$_cur"
+    fi
+  else
+    if [[ "$_req" == required ]]; then
+      printf '  %-24s  (required): ' "$_label" >&2
+    else
+      printf '  %-24s  (optional, Enter to skip): ' "$_label" >&2
+    fi
+    read -rs _val; printf '\n' >&2
+    if [[ -z "$_val" && "$_req" == required ]]; then
+      printf '  Cannot deploy without %s.\n' "$_label" >&2; exit 1
+    fi
+    printf '%s' "$_val"
+  fi
+}
+
+printf '\n--- API keys ---\n'
+OPENAI_API_KEY=$(_prompt_key    "OPENAI_API_KEY"    "${OPENAI_API_KEY:-}"    required)
+ANTHROPIC_API_KEY=$(_prompt_key "ANTHROPIC_API_KEY" "${ANTHROPIC_API_KEY:-}" optional)
+NVIDIA_API_KEY=$(_prompt_key    "NVIDIA_API_KEY"    "${NVIDIA_API_KEY:-}"    optional)
 
 for _pair in "openai-key:${OPENAI_API_KEY:-}" "anthropic-key:${ANTHROPIC_API_KEY:-}" "nvidia-key:${NVIDIA_API_KEY:-}"; do
   _pname="/${TF_VAR_name_prefix}/${_pair%%:*}"
