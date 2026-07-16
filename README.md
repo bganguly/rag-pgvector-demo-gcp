@@ -91,13 +91,12 @@ sequenceDiagram
 ### What LangChain replaces
 
 <table>
-<colgroup>
-  <col style="width:20%">
-  <col style="width:20%">
-  <col style="width:60%">
-</colgroup>
 <thead>
-<tr><th>Component</th><th>Without LangChain</th><th>Why it matters</th></tr>
+<tr>
+  <th width="20%">Component</th>
+  <th width="20%">Without LangChain</th>
+  <th width="60%">Why it matters</th>
+</tr>
 </thead>
 <tbody>
 <tr>
@@ -126,11 +125,11 @@ sequenceDiagram
 ### Key design decisions
 
 | Concern | Approach |
-|---|---|
+|:--|:--|
+| **Embeddings** | Always OpenAI `text-embedding-3-small` regardless of LLM provider toggle — Anthropic has no embeddings API; same model must be used at ingest and query time or cosine scores silently break |
 | **Retrieval** | pgvector IVFFlat cosine index; top-k chunks injected into the LLM system prompt at request time |
-| **Streaming** | Next.js API route proxies Lambda retrieve call, then calls `streamText`; the AI SDK data-stream protocol delivers deltas directly to `useChat` — no polling |
 | **Provider abstraction** | `pickModel()` in `app/api/chat/route.ts` returns the SDK model object; the rest of the route is provider-agnostic |
-| **Embeddings** | Always OpenAI `text-embedding-3-small` regardless of LLM provider toggle — Anthropic has no embeddings API |
-| **Lambda cold start** | Mangum wraps FastAPI; `lifespan` hook runs `init_db()` on cold start; asyncpg pool uses `max_inactive_connection_lifetime=30` to handle Neon's auto-pause reconnection |
+| **Streaming** | Next.js API route proxies Lambda retrieve call, then calls `streamText`; the AI SDK data-stream protocol delivers deltas directly to `useChat` — no polling |
 | **No LLM response cache** | Same prompt + updated KB should return a different answer as documents change |
+| **Lambda cold start** | Mangum wraps FastAPI; `lifespan` hook runs `init_db()` on cold start; asyncpg pool uses `max_inactive_connection_lifetime=30` to handle Neon's auto-pause reconnection |
 
