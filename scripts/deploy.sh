@@ -478,10 +478,10 @@ _prompt_key() {
   local _label="$1" _cur="${2:-}" _req="${3:-optional}"
   local _ans _val
   if [[ -n "$_cur" ]]; then
-    printf '  %-24s  %s...%s  update? [Y/n]: ' \
+    printf '  %-24s  %s...%s  update? [y/N]: ' \
       "$_label" "${_cur:0:8}" "${_cur: -4}" >&2
     read -r _ans
-    if [[ -z "$_ans" || "$_ans" =~ ^[Yy]$ ]]; then
+    if [[ "$_ans" =~ ^[Yy]$ ]]; then
       printf '  New value (Enter to keep current): ' >&2
       read -rs _val; printf '\n' >&2
       printf '%s' "${_val:-$_cur}"
