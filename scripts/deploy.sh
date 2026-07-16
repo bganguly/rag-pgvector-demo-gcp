@@ -472,6 +472,7 @@ echo "[4/4] Updating SSM parameters and deploying to ECS..."
 # Source .env for API keys only — but preserve DATABASE_URL already set from Terraform
 [[ -f "$ROOT/.env" ]] && source "$ROOT/.env" || true
 DATABASE_URL=$(_tf database_url)   # re-read from Terraform to undo any .env override
+PGVECTOR_CONNECTION="${DATABASE_URL/postgresql:\/\//postgresql+psycopg://}"
 
 # Prompt for any missing API keys
 if [[ -z "${OPENAI_API_KEY:-}" ]]; then
@@ -540,6 +541,7 @@ PYEOF
 
 BE_EXTRA_ENV=$(python3 -c "import json; print(json.dumps([e for e in [
   {'name':'DATABASE_URL','value':'${DATABASE_URL}'},
+  {'name':'PGVECTOR_CONNECTION','value':'${PGVECTOR_CONNECTION}'},
   {'name':'REDIS_URL','value':'redis://localhost:6379'},
   {'name':'OPENAI_API_KEY','value':'${OPENAI_API_KEY}'},
   {'name':'ANTHROPIC_API_KEY','value':'${ANTHROPIC_API_KEY}'},
