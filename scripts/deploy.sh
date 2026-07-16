@@ -23,7 +23,7 @@ _aws_tf_ws_count() {
 _aws_lite_count=$(_aws_tf_ws_count lite)
 
 printf '\n=== rag-pgvector-demo ===\n\n'
-printf '  [1] Local  — uvicorn + npm dev, no Docker (Postgres+Redis via .env)'
+printf '  [1] Local  — uvicorn + npm dev, no Docker (Postgres via .env)'
 printf '\n'
 printf '  [2] Lite   — AWS: ECS Fargate + RDS db.t3.micro  (~$40-60/mo if left running)'
 (( _aws_lite_count > 0 )) && printf ' [%s resources active]' "$_aws_lite_count" || printf ' [not deployed]'
@@ -53,15 +53,14 @@ esac
 #                             DATABASE_URL=postgresql://postgres:@localhost:5432/ragdb
 #                             REDIS_URL=redis://localhost:6379
 if [[ "$TARGET" == "local" ]]; then
-  [[ -f "$ROOT/.env" ]] || { echo "Error: .env not found. Copy .env.example and fill in API keys, DATABASE_URL, REDIS_URL."; exit 1; }
+  [[ -f "$ROOT/.env" ]] || { echo "Error: .env not found. Copy .env.example and fill in API keys and DATABASE_URL."; exit 1; }
   # shellcheck source=/dev/null
   source "$ROOT/.env"
-  if [[ -z "${DATABASE_URL:-}" ]] || [[ -z "${REDIS_URL:-}" ]]; then
-    printf '\nDATABASE_URL and/or REDIS_URL not set in .env.\n'
-    printf '  Remote: use your deployed Cloud SQL connection URL and Redis URL.\n'
-    printf '  Local:  brew install postgresql redis && brew services start postgresql redis\n'
-    printf '          DATABASE_URL=postgresql://postgres:@localhost:5432/ragdb\n'
-    printf '          REDIS_URL=redis://localhost:6379\n\n'
+  if [[ -z "${DATABASE_URL:-}" ]]; then
+    printf '\nDATABASE_URL not set in .env.\n'
+    printf '  Remote: use your deployed Cloud SQL connection URL.\n'
+    printf '  Local:  brew install postgresql@16 && brew services start postgresql@16\n'
+    printf '          DATABASE_URL=postgresql://postgres:@localhost:5432/ragdb\n\n'
     exit 1
   fi
 
@@ -302,7 +301,7 @@ fi
 
 # ── AWS ECS ───────────────────────────────────────────────────────────────────
 printf '\n--- AWS Lite summary ---\n'
-printf '  Backend:  ECS Fargate 0.5 vCPU / 1 GB + Redis sidecar\n'
+printf '  Backend:  ECS Fargate 0.5 vCPU / 1 GB\n'
 printf '  Frontend: ECS Fargate 0.25 vCPU / 0.5 GB\n'
 printf '  DB:       RDS PostgreSQL 16 db.t3.micro (20 GB)\n'
 printf '  Cost est: ~$40-60/mo if left running — TEAR DOWN when done\n'
@@ -543,8 +542,7 @@ PYEOF
 BE_EXTRA_ENV=$(python3 -c "import json; print(json.dumps([e for e in [
   {'name':'DATABASE_URL','value':'${DATABASE_URL}'},
   {'name':'PGVECTOR_CONNECTION','value':'${PGVECTOR_CONNECTION}'},
-  {'name':'REDIS_URL','value':'redis://localhost:6379'},
-  {'name':'OPENAI_API_KEY','value':'${OPENAI_API_KEY}'},
+{'name':'OPENAI_API_KEY','value':'${OPENAI_API_KEY}'},
   {'name':'ANTHROPIC_API_KEY','value':'${ANTHROPIC_API_KEY}'},
   {'name':'NVIDIA_API_KEY','value':'${NVIDIA_API_KEY}'},
 ] if e['value']]))")

@@ -24,29 +24,12 @@ resource "aws_ecs_task_definition" "backend" {
       image     = "${aws_ecr_repository.backend.repository_url}:latest"
       essential = true
       portMappings = [{ containerPort = var.be_port, protocol = "tcp" }]
-      environment = [
-        { name = "REDIS_URL", value = "redis://localhost:6379" }
-      ]
       logConfiguration = {
         logDriver = "awslogs"
         options = {
           "awslogs-group"         = aws_cloudwatch_log_group.main.name
           "awslogs-region"        = var.aws_region
           "awslogs-stream-prefix" = "backend"
-        }
-      }
-    },
-    {
-      name      = "redis"
-      image     = "redis:7-alpine"
-      essential = false
-      portMappings = [{ containerPort = 6379, protocol = "tcp" }]
-      logConfiguration = {
-        logDriver = "awslogs"
-        options = {
-          "awslogs-group"         = aws_cloudwatch_log_group.main.name
-          "awslogs-region"        = var.aws_region
-          "awslogs-stream-prefix" = "redis"
         }
       }
     }
