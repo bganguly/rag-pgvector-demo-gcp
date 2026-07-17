@@ -27,6 +27,8 @@ locals {
       post_build:
         commands:
           - docker push $REPOSITORY_URI:$IMAGE_TAG
+          - docker tag $REPOSITORY_URI:$IMAGE_TAG $REPOSITORY_URI:latest
+          - docker push $REPOSITORY_URI:latest
   BUILDSPEC
 }
 

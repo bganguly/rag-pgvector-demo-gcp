@@ -154,6 +154,36 @@
       </div>
     </div>
 
+    <!-- GET wikipedia.org/w/api.php -->
+    <div class="glass rounded-2xl overflow-hidden">
+      <button class="w-full flex items-center justify-between gap-4 px-6 py-4 text-left" onclick="toggleCard('wiki')">
+        <div class="flex items-center gap-3">
+          <span class="chip method-get text-[11px] px-2 py-0.5">GET</span>
+          <span class="endpoint-path">wikipedia.org/w/api.php</span>
+          <span class="text-xs text-zinc-600 hidden sm:inline">Fetch a Wikipedia article as plain text — the same call SeedPanel makes before ingesting</span>
+        </div>
+        <svg id="chevron-wiki" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-zinc-600 flex-shrink-0 transition-transform duration-200"><path d="M6 9l6 6 6-6"/></svg>
+      </button>
+      <div id="body-wiki" class="hidden px-6 pb-6 border-t" style="border-color:rgba(255,255,255,0.06)">
+        <div class="pt-4 mb-4">
+          <div class="schema-block">
+            action=query &amp; prop=extracts &amp; explaintext=true &amp; origin=*
+          </div>
+        </div>
+        <div class="flex flex-wrap items-end gap-3 mb-4">
+          <div class="flex-1 min-w-[200px]">
+            <label class="text-[10px] text-zinc-600 uppercase tracking-wider block mb-1.5">Wikipedia slug</label>
+            <input type="text" id="wiki-slug" value="Inflation" placeholder="e.g. Inflation" />
+          </div>
+          <button class="run-btn" onclick="runWiki()">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M5 3l14 9-14 9V3z"/></svg>
+            Fetch
+          </button>
+        </div>
+        <div id="result-wiki"></div>
+      </div>
+    </div>
+
     <!-- POST /api/ingest -->
     <div class="glass rounded-2xl overflow-hidden">
       <button class="w-full flex items-center justify-between gap-4 px-6 py-4 text-left" onclick="toggleCard('ingest')">
@@ -370,6 +400,42 @@
         (res.ok
           ? `<div class="success-msg">✓ ${json.status}</div>`
           : `<div class="error-msg">${JSON.stringify(json)}</div>`);
+    }
+
+    // GET wikipedia.org/w/api.php
+    async function runWiki() {
+      const slug = document.getElementById('wiki-slug').value.trim();
+      if (!slug) {
+        document.getElementById('result-wiki').innerHTML =
+          `<div class="error-msg">Enter a Wikipedia slug.</div>`;
+        return;
+      }
+      setLoading('result-wiki');
+      const url = `https://en.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(slug)}&prop=extracts&explaintext=true&format=json&origin=*`;
+      const t0 = performance.now();
+      let data;
+      try {
+        const res = await fetch(url);
+        data = await res.json();
+      } catch (e) {
+        document.getElementById('result-wiki').innerHTML = renderError(e);
+        return;
+      }
+      const ms = Math.round(performance.now() - t0);
+      const pages = data.query && data.query.pages;
+      const page  = pages && Object.values(pages)[0];
+      const extract = page && page.extract;
+      if (!extract) {
+        document.getElementById('result-wiki').innerHTML =
+          renderError({ message: `No extract found for "${slug}". Check the slug.` });
+        return;
+      }
+      const charCount = extract.length;
+      const preview   = extract.slice(0, 400);
+      document.getElementById('result-wiki').innerHTML =
+        metaBar(ms, 200, `~${charCount.toLocaleString()} chars`) +
+        `<pre class="raw-json">${preview.replace(/</g, '&lt;').replace(/>/g, '&gt;')}…</pre>` +
+        `<p class="text-[11px] text-zinc-600 mt-2">${charCount.toLocaleString()} total chars — showing first 400</p>`;
     }
 
     // POST /api/ingest

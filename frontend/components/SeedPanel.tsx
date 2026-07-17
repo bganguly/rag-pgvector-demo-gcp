@@ -13,7 +13,7 @@ const TOPICS = [
   { id: "treasury", label: "US Treasury Securities",   slug: "United_States_Treasury_security" },
 ];
 
-type Status = "idle" | "fetching" | "ingesting" | "done" | "error";
+type Status = "idle" | "fetching" | "ingesting" | "retrying" | "done" | "error";
 type TState = {
   status: Status;
   chunks?:     number;
@@ -22,11 +22,12 @@ type TState = {
   errorMsg?:   string;
 };
 
-const STATUS_ICON: Record<Status, string> = { idle: "", fetching: "↓", ingesting: "", done: "✓", error: "✗" };
+const STATUS_ICON: Record<Status, string> = { idle: "", fetching: "↓", ingesting: "", retrying: "", done: "✓", error: "✗" };
 const STATUS_COLOR: Record<Status, string> = {
   idle:      "var(--text-2)",
   fetching:  "var(--accent)",
   ingesting: "var(--accent)",
+  retrying:  "var(--text-2)",
   done:      "#22c55e",
   error:     "#ef4444",
 };
@@ -69,6 +70,11 @@ export default function SeedPanel({ onReady }: { onReady?: () => void }) {
   const [running, setRunning] = useState(false);
   const [total, setTotal]     = useState(0);
   const [tick, setTick]       = useState(0);
+  const [activeBatch, setActiveBatch] = useState<string[]>([]);
+
+  useEffect(() => {
+    fetch("/api/health").catch(() => null);
+  }, []);
 
   useEffect(() => {
     if (!running) return;
@@ -92,15 +98,24 @@ export default function SeedPanel({ onReady }: { onReady?: () => void }) {
   function clearAll()  { setSelected(new Set()); }
 
   async function load(clearFirst = false) {
-    const batch = TOPICS.filter((t) => selected.has(t.id));
+    const batch = clearFirst
+      ? TOPICS.filter((t) => selected.has(t.id))
+      : TOPICS.filter((t) => selected.has(t.id) && states[t.id].status !== "done");
     if (!batch.length) return;
 
     setRunning(true);
     setTotal(0);
-    setStates(blank());
+    setActiveBatch(batch.map((t) => t.id));
 
     if (clearFirst) {
+      setStates(blank());
       await fetch("/api/reset", { method: "DELETE" }).catch(() => null);
+    } else {
+      setStates((prev) => {
+        const next = { ...prev };
+        batch.forEach((t) => { next[t.id] = { status: "idle" }; });
+        return next;
+      });
     }
 
     let acc = 0;
@@ -121,7 +136,15 @@ export default function SeedPanel({ onReady }: { onReady?: () => void }) {
         fd.append("text", text);
         fd.append("source", `wikipedia/${t.slug}`);
 
-        const res  = await fetch("/api/ingest", { method: "POST", body: fd });
+        let res = await fetch("/api/ingest", { method: "POST", body: fd });
+
+        if (res.status === 503) {
+          set(t.id, { status: "retrying", estChunks, startedAt: Date.now() });
+          await new Promise((r) => setTimeout(r, 10000));
+          set(t.id, { status: "ingesting", estChunks, startedAt: Date.now() });
+          res = await fetch("/api/ingest", { method: "POST", body: fd });
+        }
+
         const data = await res.json();
         if (!res.ok) throw new Error(data.detail ?? data.Message ?? `HTTP ${res.status}`);
 
@@ -137,10 +160,16 @@ export default function SeedPanel({ onReady }: { onReady?: () => void }) {
     onReady?.();
   }
 
-  function toLoad() { return TOPICS.filter((t) => selected.has(t.id)); }
-  const doneCount     = toLoad().filter((t) => states[t.id].status === "done").length;
-  const allDone       = toLoad().length > 0 && doneCount === toLoad().length;
-  const selectedCount = selected.size;
+  const toLoad          = () => TOPICS.filter((t) => selected.has(t.id));
+  const selectedForLoad = toLoad().filter((t) => states[t.id].status !== "done");
+  const selectedInKB    = toLoad().filter((t) => states[t.id].status === "done");
+  const doneCount       = selectedInKB.length;
+  const allDone         = toLoad().length > 0 && doneCount === toLoad().length;
+  const selectedCount   = selectedForLoad.length;
+  const moreAvailable   = TOPICS.some((t) => states[t.id].status !== "done");
+  const activeDoneCount = running
+    ? activeBatch.filter((id) => states[id]?.status === "done").length
+    : 0;
 
   return (
     <div className="flex flex-col gap-3 p-5">
@@ -153,12 +182,10 @@ export default function SeedPanel({ onReady }: { onReady?: () => void }) {
             Unstructured source · Wikipedia / Economics
           </p>
         </div>
-        {!running && (
           <div className="flex gap-2 mt-0.5">
             <button onClick={selectAll} className="text-[10px] underline" style={{ color: "var(--text-2)" }}>All</button>
             <button onClick={clearAll}  className="text-[10px] underline" style={{ color: "var(--text-2)" }}>None</button>
           </div>
-        )}
       </div>
 
 
@@ -166,24 +193,24 @@ export default function SeedPanel({ onReady }: { onReady?: () => void }) {
         {TOPICS.map((t) => {
           const s        = states[t.id];
           const isSel    = selected.has(t.id);
-          const isActive = s.status === "fetching" || s.status === "ingesting";
-          const isDone   = s.status === "done";
+          const isActive = s.status === "fetching" || s.status === "ingesting" || s.status === "retrying";
+          const isInKB   = s.status === "done";
           const isError  = s.status === "error";
 
-          const elapsed = s.status === "ingesting" && s.startedAt
+          const elapsed = (s.status === "ingesting" || s.status === "retrying") && s.startedAt
             ? Math.floor((Date.now() - s.startedAt) / 1000)
             : 0;
           const spinnerChar = SPINNER[tick % SPINNER.length];
 
-          const bg     = isDone  ? "rgba(34,197,94,0.12)"
+          const bg     = isInKB  ? (isSel ? "rgba(34,197,94,0.12)" : "rgba(34,197,94,0.04)")
                        : isError ? "rgba(239,68,68,0.10)"
                        : isSel   ? "rgba(var(--accent-rgb), 0.15)"
                        : "transparent";
-          const border  = isDone  ? "#22c55e55"
+          const border  = isInKB  ? (isSel ? "#22c55e88" : "#22c55e33")
                         : isError ? "#ef444455"
                         : isSel   ? "var(--accent)"
                         : "var(--border)";
-          const color   = isDone  ? "#22c55e"
+          const color   = isInKB  ? (isSel ? "#22c55e" : "#22c55e66")
                         : isError ? "#ef4444"
                         : isSel   ? "var(--accent)"
                         : "var(--text-2)";
@@ -192,14 +219,14 @@ export default function SeedPanel({ onReady }: { onReady?: () => void }) {
             <button
               key={t.id}
               onClick={() => toggleTopic(t.id)}
-              disabled={running}
+              disabled={isActive}
+              title={isInKB ? (isSel ? "In KB · click to deselect" : "In KB (deselected) · click to select") : undefined}
               className="flex items-center gap-1.5 px-2.5 py-1 rounded text-xs transition-all"
               style={{
                 background: bg,
                 border: `1px solid ${border}`,
                 color,
-                opacity: running && !isSel ? 0.35 : 1,
-                cursor:  running ? "default" : "pointer",
+                cursor: isActive ? "default" : "pointer",
               }}
             >
               {s.status === "ingesting" && (
@@ -207,14 +234,19 @@ export default function SeedPanel({ onReady }: { onReady?: () => void }) {
                   {spinnerChar}
                 </span>
               )}
-              {s.status !== "ingesting" && (isActive || isDone || isError) && (
+              {s.status === "retrying" && (
+                <span className="font-mono" style={{ color: STATUS_COLOR.retrying }}>
+                  {spinnerChar}
+                </span>
+              )}
+              {s.status !== "ingesting" && s.status !== "retrying" && (isActive || isInKB || isError) && (
                 <span className="font-mono" style={{ color: STATUS_COLOR[s.status] }}>
                   {STATUS_ICON[s.status]}
                 </span>
               )}
               {t.label}
-              {isDone && (
-                <span style={{ opacity: 0.6, fontSize: "0.65rem" }}>✓</span>
+              {isInKB && (
+                <span style={{ opacity: isSel ? 0.6 : 0.3, fontSize: "0.65rem" }}>✓</span>
               )}
               {s.status === "fetching" && (
                 <span style={{ opacity: 0.7, fontSize: "0.65rem" }}>Fetching…</span>
@@ -224,14 +256,23 @@ export default function SeedPanel({ onReady }: { onReady?: () => void }) {
                   {ingestStepLabel(elapsed)}…
                 </span>
               )}
+              {s.status === "retrying" && (
+                <span style={{ opacity: 0.7, fontSize: "0.65rem" }}>Starting up…</span>
+              )}
             </button>
           );
         })}
       </div>
 
+      {!running && selectedInKB.length > 0 && selectedCount > 0 && (
+        <div className="text-[10px]" style={{ color: "var(--text-2)" }}>
+          {selectedInKB.map((t) => t.label).join(", ")} already in KB — only {selectedCount} new topic{selectedCount > 1 ? "s" : ""} will be fetched
+        </div>
+      )}
+
       {running && (
         <div className="text-xs text-center" style={{ color: "var(--text-2)" }}>
-          {doneCount} / {toLoad().length} topics · {total} chunks indexed
+          {activeDoneCount} / {activeBatch.length} topics · {total} chunks indexed
         </div>
       )}
 
@@ -253,13 +294,29 @@ export default function SeedPanel({ onReady }: { onReady?: () => void }) {
           >
             ✓ Ready — ask a question in the chat
           </div>
-          <div className="flex gap-3 justify-center">
-            <button onClick={() => load(true)}  className="text-xs underline" style={{ color: "#ef4444" }}>
-              Clear &amp; Re-index
+          <div className="flex gap-4 justify-center">
+            <button
+              onClick={() => load(true)}
+              className="flex flex-col items-center gap-0.5"
+            >
+              <span className="text-xs underline" style={{ color: "#ef4444" }}>↺ Reset &amp; Reload</span>
+              <span className="text-[10px]" style={{ color: "var(--text-2)" }}>clears knowledge base · re-fetches selected</span>
             </button>
-            <button onClick={() => load(false)} className="text-xs underline" style={{ color: "var(--text-2)" }}>
-              Append
-            </button>
+            {moreAvailable && (
+              <button
+                onClick={() => load(false)}
+                disabled={selectedCount === 0}
+                className="flex flex-col items-center gap-0.5"
+                style={{ opacity: selectedCount === 0 ? 0.5 : 1 }}
+              >
+                <span className="text-xs underline" style={{ color: "var(--text-2)" }}>
+                  + Load More{selectedCount > 0 ? ` (${selectedCount})` : ""}
+                </span>
+                <span className="text-[10px]" style={{ color: "var(--text-2)" }}>
+                  {selectedCount > 0 ? "keeps existing · adds selected topics" : "pick more topics above · keeps existing"}
+                </span>
+              </button>
+            )}
           </div>
         </>
       ) : (
@@ -274,10 +331,12 @@ export default function SeedPanel({ onReady }: { onReady?: () => void }) {
           }}
         >
           {running
-            ? `Loading ${doneCount} / ${toLoad().length}…`
+            ? `Loading ${activeDoneCount} / ${activeBatch.length}…`
             : selectedCount === 0
-            ? "Pick one or two topics above to get started"
-            : `Load Selected (${selectedCount})`}
+            ? doneCount > 0
+              ? `${doneCount} topic${doneCount > 1 ? "s" : ""} already in KB · select more to add`
+              : "Pick one or two topics above to get started"
+            : `Load ${selectedCount} new topic${selectedCount > 1 ? "s" : ""}${doneCount > 0 ? ` · ${doneCount} already in KB` : ""}`}
         </button>
       )}
     </div>

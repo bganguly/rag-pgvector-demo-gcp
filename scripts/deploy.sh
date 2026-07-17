@@ -486,7 +486,15 @@ _vercel_env "ANTHROPIC_API_KEY"  "${ANTHROPIC_API_KEY:-}"
 _vercel_env "NVIDIA_API_KEY"     "${NVIDIA_API_KEY:-}"
 
 printf '  Deploying frontend to Vercel...\n'
-FRONTEND_URL=$(vercel --prod --yes 2>/dev/null | tail -1)
+_VERCEL_OUT=$(mktemp /tmp/vercel-out-XXXXXX)
+vercel --prod --yes 2>&1 | tee "$_VERCEL_OUT"
+FRONTEND_URL=$(grep -oE 'https://[a-zA-Z0-9._-]+\.vercel\.app' "$_VERCEL_OUT" | tail -1)
+rm -f "$_VERCEL_OUT"
+
+sed -i '' "s|\[Live demo →\]([^)]*)|[Live demo →](${FRONTEND_URL})|" "$ROOT/README.md"
+git -C "$ROOT" add README.md
+git -C "$ROOT" commit -m "chore: update live demo URL after frontend redeploy" 2>/dev/null || true
+git -C "$ROOT" push 2>/dev/null || true
 
 printf '\n✓ RAG + pgvector Demo live (serverless)\n'
 printf '  App:      %s\n' "$FRONTEND_URL"
@@ -497,5 +505,5 @@ printf '  Tear down: ./scripts/infra-down.sh --aws\n'
 PORTFOLIO_SET_LIVE="$(cd "$ROOT/../../portfolio/scripts" 2>/dev/null && pwd || true)/set-live-url.sh"
 if [[ -f "$PORTFOLIO_SET_LIVE" ]]; then
   printf '\n  Updating portfolio live-urls.js...\n'
-  bash "$PORTFOLIO_SET_LIVE" --tier "lite" rag "$FRONTEND_URL" "${BACKEND_URL}"
+  bash "$PORTFOLIO_SET_LIVE" --tier "lite" rag "$FRONTEND_URL" "${FRONTEND_URL}/api-explorer.html"
 fi

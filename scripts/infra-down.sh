@@ -143,7 +143,7 @@ PYEOF
 }
 
 # snapshot initial group counts to a temp file
-INIT_FILE="$(mktemp /tmp/tf-init-XXXX.txt)"
+INIT_FILE="$(mktemp /tmp/tf-init-XXXXXX)"
 _RAW=$(_group_stats "")
 _BEFORE="${_RAW%%|*}"
 python3 - "$STATE_FILE" "$INIT_FILE" <<'PYEOF'
@@ -187,9 +187,23 @@ printf '\n  Proceed? [Y/n]: '
 read -r _CONFIRM
 [[ "${_CONFIRM:-y}" =~ ^[Yy]$ ]] || { red 'Aborted.'; rm -f "$INIT_FILE"; exit 1; }
 
+# flush ECR repos so Terraform can delete them
+bold '\nFlushing ECR images...'
+for _repo in "${TF_VAR_name_prefix}-backend" "${TF_VAR_name_prefix}-frontend"; do
+  _ids=$(aws ecr list-images --repository-name "$_repo" \
+    --query 'imageIds[*]' --output json --no-cli-pager 2>/dev/null || echo '[]')
+  if [[ "$_ids" != "[]" && "$_ids" != "" ]]; then
+    aws ecr batch-delete-image --repository-name "$_repo" \
+      --image-ids "$_ids" --no-cli-pager >/dev/null 2>&1 \
+      && green "  $_repo — images deleted" || dim "  $_repo — delete skipped"
+  else
+    dim "  $_repo — already empty"
+  fi
+done
+
 # run destroy in background, poll progress
 bold '\nRunning terraform destroy...'
-LOG_FILE="$(mktemp /tmp/tf-destroy-XXXX.log)"
+LOG_FILE="$(mktemp /tmp/tf-destroy-XXXXXX)"
 terraform destroy -auto-approve -var "name_prefix=${TF_VAR_name_prefix}" \
   >"$LOG_FILE" 2>&1 &
 TF_PID=$!
