@@ -487,14 +487,14 @@ _vercel_env "NVIDIA_API_KEY"     "${NVIDIA_API_KEY:-}"
 
 printf '  Deploying frontend to Vercel...\n'
 _VERCEL_OUT=$(mktemp /tmp/vercel-out-XXXXXX)
-vercel --prod --yes 2>&1 | tee "$_VERCEL_OUT"
+vercel --prod --yes >"$_VERCEL_OUT" 2>&1
 FRONTEND_URL=$(grep -oE 'https://[a-zA-Z0-9._-]+\.vercel\.app' "$_VERCEL_OUT" | tail -1)
 rm -f "$_VERCEL_OUT"
 
 sed -i '' "s|\[Live demo →\]([^)]*)|[Live demo →](${FRONTEND_URL})|" "$ROOT/README.md"
 git -C "$ROOT" add README.md
-git -C "$ROOT" commit -m "chore: update live demo URL after frontend redeploy" 2>/dev/null || true
-git -C "$ROOT" push 2>/dev/null || true
+git -C "$ROOT" commit -m "chore: update live demo URL after frontend redeploy" >/dev/null 2>&1 || true
+git -C "$ROOT" push >/dev/null 2>&1 || true
 
 printf '\n✓ RAG + pgvector Demo live (serverless)\n'
 printf '  App:      %s\n' "$FRONTEND_URL"
