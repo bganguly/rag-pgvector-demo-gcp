@@ -134,7 +134,7 @@ _prompt_key() {
   local _label="$1" _cur="${2:-}" _req="${3:-optional}"
   local _ans _val
   if [[ -n "$_cur" ]]; then
-    printf '  %-24s  stored: %s...%s  use it? (Y/n): ' \
+    printf '  Use stored %s (%s...%s) (Y/n): ' \
       "$_label" "${_cur:0:8}" "${_cur: -4}" >&2
     read -r _ans
     _ans="${_ans:-Y}"
