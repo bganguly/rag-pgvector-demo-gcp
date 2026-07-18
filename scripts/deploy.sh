@@ -286,8 +286,11 @@ _vercel_env "NVIDIA_API_KEY"     "${NVIDIA_API_KEY:-}"
 
 printf '  Deploying frontend to Vercel...\n'
 _VERCEL_OUT=$(mktemp /tmp/vercel-out-XXXXXX)
-vercel --prod --yes >"$_VERCEL_OUT" 2>&1
+vercel --prod --yes 2>&1 | tee "$_VERCEL_OUT"
 FRONTEND_URL=$(grep -oE 'https://[a-zA-Z0-9._-]+\.vercel\.app' "$_VERCEL_OUT" | tail -1)
+if [[ -z "$FRONTEND_URL" ]]; then
+  FRONTEND_URL=$(vercel ls --prod --limit 1 2>/dev/null | grep -oE 'https://[a-zA-Z0-9._-]+\.vercel\.app' | head -1)
+fi
 rm -f "$_VERCEL_OUT"
 
 sed -i '' "s|\[Live demo →\]([^)]*)|[Live demo →](${FRONTEND_URL})|" "$ROOT/README.md"
