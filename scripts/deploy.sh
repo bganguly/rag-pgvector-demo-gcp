@@ -96,6 +96,11 @@ terraform init -upgrade -input=false
 terraform workspace select "$DEPLOY_WORKSPACE" 2>/dev/null \
   || terraform workspace new "$DEPLOY_WORKSPACE"
 
+terraform state rm aws_codebuild_project.backend                   2>/dev/null || true
+terraform state rm aws_iam_role_policy.codebuild                   2>/dev/null || true
+terraform state rm aws_iam_role.codebuild                          2>/dev/null || true
+terraform state rm aws_s3_bucket_lifecycle_configuration.build_artifacts 2>/dev/null || true
+
 _tf() { terraform output -raw "$1" 2>/dev/null; }
 
 # Phase 1 — ECR only; Lambda requires the image to exist in ECR first
