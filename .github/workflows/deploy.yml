@@ -1,0 +1,34 @@
+name: Build & Push to ECR
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push backend image
+        env:
+          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          REPO: rag-lite-backend
+          SHA: ${{ github.sha }}
+        run: |
+          SHORT_SHA="${SHA::7}"
+          docker build --platform linux/amd64 -t "$REGISTRY/$REPO:$SHORT_SHA" backend/
+          docker tag "$REGISTRY/$REPO:$SHORT_SHA" "$REGISTRY/$REPO:latest"
+          docker push "$REGISTRY/$REPO:$SHORT_SHA"
+          docker push "$REGISTRY/$REPO:latest"

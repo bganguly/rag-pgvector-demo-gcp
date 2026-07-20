@@ -89,7 +89,7 @@ printf '  Credentials valid: %s\n' "$(aws sts get-caller-identity --query 'Arn' 
 AWS_REGION=$(aws configure get region 2>/dev/null || echo "us-east-1")
 
 echo ""
-echo "[2/5] Provisioning bootstrap infra (ECR, S3, IAM, CodeBuild)..."
+echo "[2/5] Provisioning bootstrap infra (ECR, IAM)..."
 INFRA_DIR="$ROOT/infra/aws"
 cd "$INFRA_DIR"
 terraform init -upgrade -input=false
@@ -98,16 +98,13 @@ terraform workspace select "$DEPLOY_WORKSPACE" 2>/dev/null \
 
 _tf() { terraform output -raw "$1" 2>/dev/null; }
 
-# Phase 1 — ECR, S3, IAM, CodeBuild only; Lambda requires the image to exist in ECR first
+# Phase 1 — ECR only; Lambda requires the image to exist in ECR first
 terraform apply -auto-approve -var "name_prefix=${TF_VAR_name_prefix}" \
-  -target=aws_codebuild_project.backend \
-  -target=aws_iam_role_policy.codebuild \
-  -target=aws_s3_bucket_lifecycle_configuration.build_artifacts
+  -target=aws_ecr_repository.backend \
+  -target=aws_ecr_lifecycle_policy.backend
 
 BE_ECR_URI=$(_tf backend_ecr_uri)
 AWS_REGION=$(_tf aws_region || aws configure get region 2>/dev/null || echo "us-east-1")
-BUILD_BUCKET=$(_tf build_bucket)
-CB_BE_PROJECT=$(_tf codebuild_backend_project)
 
 echo ""
 echo "[3/5] Neon database setup..."
@@ -186,22 +183,6 @@ _ecr_image_exists() {
     --region "$AWS_REGION" >/dev/null 2>&1
 }
 
-_codebuild_wait() {
-  local _build_id="$1" _label="$2" _elapsed=0
-  printf '  %s build started: %s\n' "$_label" "$_build_id"
-  while true; do
-    _status=$(aws codebuild batch-get-builds --ids "$_build_id" \
-      --query "builds[0].buildStatus" --output text 2>/dev/null)
-    case "$_status" in
-      SUCCEEDED) printf '  %s build succeeded (%ds).\n' "$_label" "$_elapsed"; return 0 ;;
-      FAILED|FAULT|TIMED_OUT|STOPPED)
-        printf '  %s build %s (%ds) — check CodeBuild console.\n' "$_label" "$_status" "$_elapsed"; return 1 ;;
-      *) sleep 15; _elapsed=$(( _elapsed + 15 ))
-         printf '  %s still building... %ds\n' "$_label" "$_elapsed" ;;
-    esac
-  done
-}
-
 BE_REPO_NAME="${TF_VAR_name_prefix}-backend"
 if _ecr_image_exists "$BE_REPO_NAME" "$TAG"; then
   printf '  Backend image %s already in ECR — skipping build.\n' "$TAG"
@@ -212,15 +193,9 @@ if _ecr_image_exists "$BE_REPO_NAME" "$TAG"; then
     --image-manifest "$_MANIFEST" --no-cli-pager >/dev/null 2>&1 \
     && printf '  Re-tagged %s as latest.\n' "$TAG" || true
 else
-  printf '  Uploading backend source to S3...\n'
-  (cd "$ROOT/backend" && zip -qr "/tmp/rag-backend-source.zip" .)
-  aws s3 cp "/tmp/rag-backend-source.zip" "s3://${BUILD_BUCKET}/backend-source.zip" --no-cli-pager >/dev/null
-  printf '  Building backend (%s:%s)...\n' "$BE_ECR_URI" "$TAG"
-  _BUILD_ID=$(aws codebuild start-build \
-    --project-name "$CB_BE_PROJECT" \
-    --environment-variables-override "name=IMAGE_TAG,value=${TAG},type=PLAINTEXT" \
-    --query "build.id" --output text --no-cli-pager)
-  _codebuild_wait "$_BUILD_ID" "backend"
+  printf '  ERROR: Backend image %s not found in ECR (%s).\n' "$TAG" "$BE_REPO_NAME"
+  printf '  Push to main to trigger the GitHub Actions build, then re-run this script.\n'
+  exit 1
 fi
 
 echo "  Finalising Lambda and remaining infra..."
