@@ -120,6 +120,7 @@ terraform apply -auto-approve -var "name_prefix=${TF_VAR_name_prefix}" \
   -target=aws_ecr_repository.backend \
   -target=aws_ecr_lifecycle_policy.backend
 
+printf '  Reading Terraform outputs...\n'
 BE_ECR_URI=$(_tf backend_ecr_uri)
 AWS_REGION=$(_tf aws_region || aws configure get region 2>/dev/null || echo "us-east-1")
 
