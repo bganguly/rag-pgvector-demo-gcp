@@ -199,6 +199,8 @@ _ecr_image_exists() {
     --region "$AWS_REGION" >/dev/null 2>&1
 }
 
+echo ""
+printf '  Checking ECR for image %s...\n' "$TAG"
 BE_REPO_NAME="${TF_VAR_name_prefix}-backend"
 if ! _ecr_image_exists "$BE_REPO_NAME" "$TAG"; then
   printf '  Image %s not in ECR yet — waiting for GitHub Actions build (up to 10 min)...\n' "$TAG"
